@@ -52,9 +52,13 @@ export function teamById(id: string, viewerId?: string): Team | undefined {
 
 export function createTeam(ownerId: string, hackathonId: string, title: string, description: string, lookingFor: string[], maxSize: number): Team {
   const id = uid('team');
-  run(`INSERT INTO teams (id,hackathon_id,owner_id,title,description,looking_for,max_size,created_at)
-       VALUES (?,?,?,?,?,?,?,?)`, id, hackathonId, ownerId, title, description, JSON.stringify(lookingFor), maxSize, Date.now());
-  run('INSERT OR IGNORE INTO team_members VALUES (?,?,?)', id, ownerId, Date.now());
+  db().exec('BEGIN IMMEDIATE');
+  try {
+    run(`INSERT INTO teams (id,hackathon_id,owner_id,title,description,looking_for,max_size,created_at)
+         VALUES (?,?,?,?,?,?,?,?)`, id, hackathonId, ownerId, title, description, JSON.stringify(lookingFor), maxSize, Date.now());
+    run('INSERT INTO team_members VALUES (?,?,?)', id, ownerId, Date.now());
+    db().exec('COMMIT');
+  } catch (error) { db().exec('ROLLBACK'); throw error; }
   return toTeam(get<TeamRow>('SELECT * FROM teams WHERE id=?', id)!, ownerId);
 }
 
@@ -112,15 +116,27 @@ export function createTeamRequest(teamId: string, fromUserId: string, message: s
 
 /** Accept creates/updates the encrypted team conversation and notifies both sides. */
 export function resolveTeamRequest(requestId: string, ownerId: string, accept: boolean): boolean {
+  db().exec('BEGIN IMMEDIATE');
   const row = get<{ id: string; team_id: string; from_user_id: string; status: RequestStatus; owner_id: string; title: string; hackathon_id: string }>(
     `SELECT r.*, t.owner_id, t.title, t.hackathon_id FROM team_requests r JOIN teams t ON t.id=r.team_id WHERE r.id=?`, requestId);
-  if (!row || row.owner_id !== ownerId || row.status !== 'pending') return false;
-  run('UPDATE team_requests SET status=?, resolved_at=? WHERE id=?', accept ? 'accepted' : 'rejected', Date.now(), requestId);
+  if (!row || row.owner_id !== ownerId || row.status !== 'pending') {
+    db().exec('ROLLBACK');
+    return false;
+  }
+  try {
+    if (accept && !get('SELECT 1 FROM team_members WHERE team_id=? AND user_id=?', row.team_id, row.from_user_id)) {
+      const team = get<{ max_size: number; count: number }>(
+        'SELECT max_size, (SELECT COUNT(*) FROM team_members WHERE team_id=teams.id) AS count FROM teams WHERE id=?', row.team_id);
+      if (!team || team.count >= team.max_size) conflict('Team is full');
+      run('INSERT INTO team_members VALUES (?,?,?)', row.team_id, row.from_user_id, Date.now());
+    }
+    run('UPDATE team_requests SET status=?, resolved_at=? WHERE id=?', accept ? 'accepted' : 'rejected', Date.now(), requestId);
+    db().exec('COMMIT');
+  } catch (error) { db().exec('ROLLBACK'); throw error; }
   if (!accept) {
     createNotification(row.from_user_id, 'team', 'Team request update', `Your request to join ${row.title} was declined.`, '/collaborate');
     return true;
   }
-  run('INSERT OR IGNORE INTO team_members VALUES (?,?,?)', row.team_id, row.from_user_id, Date.now());
   let conv = get<{ id: string }>('SELECT id FROM conversations WHERE team_id=?', row.team_id);
   if (!conv) {
     const convId = uid('conv');
@@ -219,7 +235,7 @@ export function setConversationKeys(id: string, userId: string, version: number,
   if (!conv || conv.key_version !== version) return false;
   const members = new Set(all<{ user_id: string }>('SELECT user_id FROM conversation_members WHERE conversation_id=?', id).map((m) => m.user_id));
   const seen = new Set<string>();
-  if (wrapped.length === 0 || wrapped.length > members.size) return false;
+  if (wrapped.length === 0 || wrapped.length !== members.size) return false;
   for (const w of wrapped) {
     if (!members.has(w.userId) || seen.has(w.userId) || w.wrappedKey.length > 4096 || w.wrappedKey.length < 10) return false;
     seen.add(w.userId);
@@ -227,7 +243,7 @@ export function setConversationKeys(id: string, userId: string, version: number,
   for (const w of wrapped) {
     run('UPDATE conversation_members SET wrapped_key=? WHERE conversation_id=? AND user_id=?', w.wrappedKey, id, w.userId);
   }
-  getHub()?.broadcastAll('keys:updated', { conversationId: id, keyVersion: version });
+  for (const memberId of members) getHub()?.broadcast(memberId, 'keys:updated', { conversationId: id, keyVersion: version });
   return true;
 }
 
@@ -236,7 +252,8 @@ export function rotateConversationKey(id: string, userId: string): boolean {
   if (!get('SELECT 1 FROM conversation_members WHERE conversation_id=? AND user_id=?', id, userId)) return false;
   run('UPDATE conversations SET key_version=key_version+1 WHERE id=?', id);
   run('UPDATE conversation_members SET wrapped_key=? WHERE conversation_id=?', '', id);
-  getHub()?.broadcastAll('keys:updated', { conversationId: id, rotated: true });
+  for (const member of all<{ user_id: string }>('SELECT user_id FROM conversation_members WHERE conversation_id=?', id))
+    getHub()?.broadcast(member.user_id, 'keys:updated', { conversationId: id, rotated: true });
   return true;
 }
 

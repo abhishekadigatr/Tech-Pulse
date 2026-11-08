@@ -132,6 +132,18 @@ export function revokeAuth(request: Request): string[] {
   ];
 }
 
+/** Revoke both access and refresh credentials atomically, including outstanding tickets. */
+export function revokeAllSessions(userId: string): void {
+  db().exec('BEGIN IMMEDIATE');
+  try {
+    const now = Date.now();
+    run('UPDATE sessions SET revoked_at=? WHERE user_id=? AND revoked_at IS NULL', now, userId);
+    run('UPDATE refresh_tokens SET revoked_at=? WHERE user_id=? AND revoked_at IS NULL', now, userId);
+    run('DELETE FROM ws_tickets WHERE user_id=?', userId);
+    db().exec('COMMIT');
+  } catch (error) { db().exec('ROLLBACK'); throw error; }
+}
+
 export function sessionsFor(userId: string): Array<{ id: string; createdAt: number; expiresAt: number; userAgent: string; current: boolean }> {
   return all<{ id: string; created_at: number; expires_at: number; user_agent: string }>(
     'SELECT id,created_at,expires_at,user_agent FROM sessions WHERE user_id=? AND revoked_at IS NULL AND expires_at > ? ORDER BY created_at DESC',

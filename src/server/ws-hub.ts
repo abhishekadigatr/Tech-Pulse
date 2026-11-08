@@ -9,6 +9,7 @@ export interface Hub {
   broadcast(userId: string, type: string, payload: Record<string, unknown>): void;
   broadcastAll(type: string, payload: Record<string, unknown>): void;
   conversationOnline(conversationId: string): number;
+  disconnectUser(userId: string): void;
   close(): void;
 }
 
@@ -165,6 +166,9 @@ export function attachWebSocketHub(httpServer: HttpServer): Hub {
   const hub: Hub = {
     broadcast,
     broadcastAll,
+    disconnectUser(userId: string): void {
+      for (const client of byUser.get(userId) ?? []) client.ws.close(1008, 'session revoked');
+    },
     conversationOnline(conversationId: string): number {
       const members = new Set(memberIds(conversationId));
       return onlineUserIds().filter((id) => members.has(id)).length;

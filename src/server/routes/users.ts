@@ -91,8 +91,13 @@ export async function handleUsers(ctx: Ctx): Promise<Response | null> {
   });
 
   r.get('/users/:id/public-keys', ({ ctx: c, params }) => {
-    requireAuth(c);
+    const auth = requireAuth(c);
     if (!/^[A-Za-z0-9_.-]{1,80}$/.test(params.id)) return notFound();
+    // Keys are available only to the owner or existing peers, regardless of visibility.
+    if (params.id !== auth.user.id && !get(`SELECT 1 FROM conversation_members a JOIN conversation_members b ON a.conversation_id=b.conversation_id
+      WHERE a.user_id=? AND b.user_id=? UNION SELECT 1 FROM team_members a JOIN team_members b ON a.team_id=b.team_id
+      WHERE a.user_id=? AND b.user_id=? LIMIT 1`, auth.user.id, params.id, auth.user.id, params.id)) return notFound();
+    if (!userById(params.id)) return notFound();
     const rows = all<{ id: string; public_jwk: string; label: string; created_at: number }>(
       'SELECT * FROM devices WHERE user_id=? ORDER BY created_at DESC', params.id);
     return ok({ items: rows.map((d) => ({ id: d.id, label: d.label, createdAt: d.created_at, publicJwk: JSON.parse(d.public_jwk) })) });

@@ -1,7 +1,7 @@
 import { DatabaseSync } from 'node:sqlite';
 import { existsSync, mkdirSync, unlinkSync } from 'node:fs';
 import path from 'node:path';
-import { hashPassword, newTotpSecret, sealForUser, sealSystem } from './crypto.ts';
+import { hashPassword, randomToken, sealForUser } from './crypto.ts';
 import type { Mode } from '@/lib/types';
 
 const DATA_DIR = path.join(process.cwd(), '.data');
@@ -384,40 +384,40 @@ function seedStatic(): void {
   }
 }
 
-export const DEMO_EMAIL = 'demo@techpulse.dev';
-export const DEMO_PASSWORD = 'PulseDemo!2026';
-export const ADMIN_EMAIL = 'admin@techpulse.dev';
-export const ADMIN_PASSWORD = 'AdminPulse!2026';
-/** Fixed demo TOTP secret — dev-only, so the sample admin can demonstrate MFA. */
-export const ADMIN_TOTP_SECRET = 'JBSWY3DPEHPK3PXPJBSWY3DPEHPK3PXP';
-
-const PEOPLE: Array<[string, string, string, string, string, string[], string, number]> = [
-  ['usr_demo', 'Aarav Rao', DEMO_EMAIL, 'NIE, Mysuru', 'Mysuru', ['React', 'TypeScript', 'Product', 'Python'], 'Building things that make student life easier. Always up for a 48-hour sprint.', 168],
-  ['usr_admin', 'Isha Menon', ADMIN_EMAIL, 'IISc, Bengaluru', 'Bengaluru', ['Platform', 'Security', 'Go'], 'Community admin and hackathon mentor.', 275],
-  ['usr_meera', 'Meera Nair', 'meera@techpulse.dev', 'NITK Surathkal', 'Mangaluru', ['ML', 'Python', 'Data viz'], 'Love turning messy datasets into clear stories.', 320],
-  ['usr_kabir', 'Kabir Shah', 'kabir@techpulse.dev', 'BITS Pilani', 'Hyderabad', ['Rust', 'Web3', 'Backend'], 'Protocol nerd. Two ETHGlobal wins and counting.', 42],
-  ['usr_ananya', 'Ananya Iyer', 'ananya@techpulse.dev', 'COEP Pune', 'Pune', ['Figma', 'Design systems', 'Research'], 'Design lead who prototypes faster than most people sketch.', 205],
-  ['usr_rohan', 'Rohan Das', 'rohan@techpulse.dev', 'DTU Delhi', 'Delhi', ['Security', 'CTF', 'Linux'], 'Blue-teamer, occasional CTF organiser.', 96],
-  ['usr_sana', 'Sana Kulkarni', 'sana@techpulse.dev', 'VJTI Mumbai', 'Mumbai', ['Flutter', 'Firebase', 'UI'], 'Mobile-first builder and community volunteer.', 18],
-];
+function demoPeople(demoEmail: string, adminEmail: string): Array<[string, string, string, string, string, string[], string, number]> {
+  return [
+  ['usr_demo', 'Aarav Rao', demoEmail, 'NIE, Mysuru', 'Mysuru', ['React', 'TypeScript', 'Product', 'Python'], 'Building things that make student life easier. Always up for a 48-hour sprint.', 168],
+  ['usr_admin', 'Isha Menon', adminEmail, 'IISc, Bengaluru', 'Bengaluru', ['Platform', 'Security', 'Go'], 'Community admin and hackathon mentor.', 275],
+  ['usr_meera', 'Meera Nair', 'meera@techpulse.invalid', 'NITK Surathkal', 'Mangaluru', ['ML', 'Python', 'Data viz'], 'Love turning messy datasets into clear stories.', 320],
+  ['usr_kabir', 'Kabir Shah', 'kabir@techpulse.invalid', 'BITS Pilani', 'Hyderabad', ['Rust', 'Web3', 'Backend'], 'Protocol nerd.', 42],
+  ['usr_ananya', 'Ananya Iyer', 'ananya@techpulse.invalid', 'COEP Pune', 'Pune', ['Figma', 'Design systems', 'Research'], 'Design lead.', 205],
+  ['usr_rohan', 'Rohan Das', 'rohan@techpulse.invalid', 'DTU Delhi', 'Delhi', ['Security', 'CTF', 'Linux'], 'Security enthusiast.', 96],
+  ['usr_sana', 'Sana Kulkarni', 'sana@techpulse.invalid', 'VJTI Mumbai', 'Mumbai', ['Flutter', 'Firebase', 'UI'], 'Mobile-first builder.', 18],
+  ];
+}
 
 /** Async because Argon2id and WebCrypto key generation are async. Idempotent. */
 export async function seedAccounts(): Promise<void> {
   db();
-  if (process.env.NODE_ENV === 'production' && process.env.ALLOW_DEMO_ACCOUNTS !== 'true') return;
+  if (process.env.NODE_ENV === 'production' || process.env.SEED_DEMO !== '1') return;
+  const { DEMO_EMAIL, DEMO_PASSWORD, ADMIN_EMAIL, ADMIN_PASSWORD } = process.env;
+  if (!DEMO_EMAIL || !DEMO_PASSWORD || !ADMIN_EMAIL || !ADMIN_PASSWORD || DEMO_EMAIL.toLowerCase() === ADMIN_EMAIL.toLowerCase()) {
+    throw new Error('SEED_DEMO requires distinct DEMO_EMAIL, ADMIN_EMAIL and both passwords');
+  }
+  const PEOPLE = demoPeople(DEMO_EMAIL.toLowerCase(), ADMIN_EMAIL.toLowerCase());
   const exists = get<{ n: number }>('SELECT COUNT(*) as n FROM users')?.n ?? 0;
   const now = Date.now();
   if (exists === 0) {
     const demoHash = await hashPassword(DEMO_PASSWORD);
     const adminHash = await hashPassword(ADMIN_PASSWORD);
-    const unknownHash = await hashPassword(`never-used-${Math.random()}`);
+    const unknownHash = await hashPassword(`never-used-${randomToken(32)}`);
     const userStmt = connection!.prepare(`INSERT OR IGNORE INTO users
       (id,email,name,password_hash,email_verified,totp_secret,totp_enabled,recovery_hashes,role,avatar_hue,college,city,skills,bio,created_at)
       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`);
     for (const [id, name, email, college, city, skills, bio, hue] of PEOPLE) {
       const isAdmin = id === 'usr_admin';
       const hash = id === 'usr_demo' ? demoHash : isAdmin ? adminHash : unknownHash;
-      userStmt.run(id, email, name, hash, 1, isAdmin ? sealSystem(ADMIN_TOTP_SECRET) : null, isAdmin ? 1 : 0,
+      userStmt.run(id, email, name, hash, 1, null, 0,
         '[]', isAdmin ? 'admin' : 'user', hue, college, city, JSON.stringify(skills), bio, now);
     }
     for (const [id] of PEOPLE) {

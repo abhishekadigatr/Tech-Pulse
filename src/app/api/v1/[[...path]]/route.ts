@@ -1,5 +1,5 @@
 import { assertSameOrigin, clientIp, errorResponse, notFound, rateLimit } from '@/server/http';
-import { ctxFrom, type Ctx } from '@/server/router';
+import { ctxFrom, enforceApiAccess, type Ctx } from '@/server/router';
 import { handleAuth } from '@/server/routes/auth';
 import { handleUsers } from '@/server/routes/users';
 import { handleCatalog } from '@/server/routes/catalog';
@@ -24,6 +24,7 @@ async function dispatch(request: Request, context: RouteContext): Promise<Respon
   const ctx = ctxFrom(request, segments);
   rateLimit(`api:${clientIp(request)}`, 900, 60_000);
   if (!['GET', 'HEAD', 'OPTIONS'].includes(ctx.method)) assertSameOrigin(request);
+  enforceApiAccess(ctx);
   for (const handle of handlers) {
     const response = await handle(ctx);
     if (response) return response;

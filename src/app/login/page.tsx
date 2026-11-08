@@ -3,7 +3,7 @@
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import {
-  ArrowLeft, ArrowRight, Check, Fingerprint, KeyRound, LockKeyhole, Mail,
+  ArrowLeft, ArrowRight, Fingerprint, KeyRound, LockKeyhole, Mail,
   ShieldCheck, Sparkles, Zap,
 } from 'lucide-react';
 import { useEffect, useState } from 'react';
@@ -26,10 +26,10 @@ export default function LoginPage() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
-  const [hint, setHint] = useState<{ demo: { email: string; password: string }; admin: { email: string; password: string; totpCode: string } } | null>(null);
+  const [hint, setHint] = useState<{ demo: { email: string; password: string }; admin: { email: string; password: string } } | null>(null);
 
   useEffect(() => { void api<typeof hint>('/auth/dev-hint').then(setHint).catch(() => null); }, []);
-  useEffect(() => { if (me) router.replace('/'); }, [me, router]);
+  useEffect(() => { if (me && new URLSearchParams(window.location.search).get('stepup') !== '1') router.replace('/'); }, [me, router]);
 
   const submit = async () => {
     setBusy(true); setError(null); setNotice(null);
@@ -130,10 +130,9 @@ export default function LoginPage() {
               <div className="mb-2 flex items-center gap-2 text-[11px] font-bold uppercase tracking-wider text-slate-400"><Sparkles size={12} className="text-cyan" /> Development shortcuts</div>
               <div className="flex flex-wrap gap-2">
                 <Button size="sm" onClick={() => { setMode('login'); setEmail(hint.demo.email); setPassword(hint.demo.password); setError(null); }}>Fill demo account</Button>
-                <Button size="sm" onClick={() => { setMode('login'); setEmail(hint.admin.email); setPassword(hint.admin.password); setError(null); }}>Fill admin (MFA)</Button>
-                {mode === 'mfa' && <Button size="sm" variant="primary" onClick={() => setCode(hint.admin.totpCode)}><Check size={12} /> Use current admin code</Button>}
+                <Button size="sm" onClick={() => { setMode('login'); setEmail(hint.admin.email); setPassword(hint.admin.password); setError(null); }}>Fill admin account</Button>
               </div>
-              <p className="mt-2 text-[10px] leading-relaxed text-slate-600">Demo accounts are seeded only outside production. Admin access requires the TOTP step.</p>
+              <p className="mt-2 text-[10px] leading-relaxed text-slate-600">Demo accounts are opt-in and seeded only outside production. Enroll in 2FA before using the workspace.</p>
             </div>
           )}
         </div>
