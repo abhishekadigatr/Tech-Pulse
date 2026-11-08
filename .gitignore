@@ -1,0 +1,13 @@
+node_modules/
+.next/
+.data/
+*.tsbuildinfo
+.env
+.env.local
+.env.*.local
+!.env.example
+coverage/
+playwright-report/
+test-results/
+.DS_Store
+*.log

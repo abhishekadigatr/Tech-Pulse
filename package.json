@@ -1,0 +1,47 @@
+{
+  "name": "tech-pulse",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Tech Pulse — a secure hackathon discovery, tracking, collaboration and journey companion.",
+  "engines": { "node": ">=22.5.0" },
+  "scripts": {
+    "dev": "tsx server.ts",
+    "dev:host": "tsx server.ts --host 0.0.0.0",
+    "build": "next build",
+    "start": "NODE_ENV=production tsx server.ts",
+    "start:host": "NODE_ENV=production tsx server.ts --host 0.0.0.0",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint . --max-warnings 0",
+    "test": "tsx --test tests/*.test.ts",
+    "e2e": "tsx tests/e2e.ts",
+    "audit": "npm audit --omit=dev --audit-level=high",
+    "db:reset": "tsx scripts/reset-db.ts"
+  },
+  "dependencies": {
+    "clsx": "2.1.1",
+    "hash-wasm": "4.13.0",
+    "lucide-react": "1.70.0",
+    "next": "15.5.29",
+    "qrcode": "1.5.4",
+    "react": "19.1.1",
+    "react-dom": "19.1.1",
+    "ws": "8.22.1",
+    "zod": "3.25.76"
+  },
+  "devDependencies": {
+    "@eslint/js": "9.39.1",
+    "@types/node": "22.18.6",
+    "@types/qrcode": "1.5.6",
+    "@types/react": "19.1.13",
+    "@types/react-dom": "19.1.9",
+    "@types/ws": "8.18.1",
+    "autoprefixer": "10.4.21",
+    "eslint": "9.39.5",
+    "postcss": "8.5.6",
+    "tailwindcss": "3.4.19",
+    "tsx": "4.23.15",
+    "typescript": "5.9.3",
+    "typescript-eslint": "8.46.4"
+  }
+}

@@ -1,47 +1,143 @@
-# Tech Pulse
+# Tech Pulse — Hackathon OS
 
-Tech Pulse is a Next.js 15 + TypeScript student opportunity platform backed by Supabase.
+A complete, runnable hackathon workspace: **discover** verified events → **apply** through a direct official link → **track** applications in an inbox → **find teammates** → **chat end-to-end encrypted over WebSockets** → **get reminded** on a calendar → **plan the journey** with route-aware food, fuel and rest tips.
 
-## Local setup
+Built as **one Next.js 15 full-stack application**. There is no separate API server, no duplicate data layer and no external service required to run it.
 
-1. Copy `.env.example` to `.env.local`. The app runs with local demo opportunities when Supabase is absent.
-2. Run the migration in `supabase/migrations/001_initial.sql` using the Supabase CLI or SQL editor.
-3. Install and start: `npm install`, `npm run dev`.
+---
 
-For another device on the same network, use `npm run dev:host` and open the Network URL printed by Next. To select a port, both `npm run dev:host -- --port 3001` and `npm run dev:host -- 3001` are supported. For a production server, use `npm run build` followed by `npm run start:host`.
+## Quick start
 
-All public listing and team content is read from Supabase. Admin role changes must be performed manually in SQL; the application never exposes a role update path. Enable Supabase Auth email verification and MFA before production use.
-
-### Google Sheets feed
-
-Hackathon details can be maintained by a Google Apps Script published as a JSON web app. Set `OPPORTUNITIES_SHEET_FEED_URL` to the HTTPS deployment URL. The endpoint may return either an array of opportunity objects or `{ "opportunities": [...] }`; rows with `approval_status` other than `approved` are ignored. The server fetches the feed with a five-minute cache, validates required identifiers/URLs before rendering, and never exposes a sheet credential to the browser.
-
-Each row should include `id`, `slug`, `name`, `organizer`, `description`, `domain`, `mode`, `deadline` (ISO timestamp), and `official_url`; optional fields match `Opportunity` in `src/lib/types.ts`.
-
-## Security notes
-
-RLS is enabled on every table, admin pages re-check the database role and MFA state, state-changing submission requests validate strict Zod schemas, enforce HTTPS URLs, check origin, and cap bodies. Production should configure an Upstash-backed rate limiter and Turnstile verification at the edge, plus a CSP nonce middleware (the static CSP header is intentionally conservative and should be replaced with request nonces before deployment).
-
-The application includes local fallbacks for rate limiting and Turnstile verification. Production should configure Supabase MFA/email settings, Upstash Redis, Cloudflare Turnstile, KMS-compatible key management, storage policies, Vercel environment variables, and a managed secrets scanner. No service-role key is used by this application.
-
-## Routes
-
-Public: `/`, `/hackathons`, `/hackathons/[slug]`, `/about`, `/saved`, `/calendar`, `/learn`, `/community`, `/compare`, `/submit`, `/privacy`.
-
-The product flow also includes `/inbox` for applied events, `/collaborate` for teammate discovery, and `/chat/[conversationId]` for encrypted realtime conversations over Supabase Realtime WebSockets. The calendar workspace supports private study/travel/event blocks and city-aware journey tips; admins can publish food, travel and event guidance in `journey_tips`.
-
-Admin: `/login`, `/admin`, `/admin/team`, `/admin/audit`. Admin access requires a database `profiles.role = 'admin'` row and an MFA-authenticated (`aal2`) Supabase session. Promotion is manual SQL only.
-
-To promote an already verified account, run a reviewed SQL statement in Supabase:
-
-```sql
-update public.profiles set role = 'admin' where id = '<verified-auth-user-uuid>';
+```bash
+npm install
+npm run dev            # http://localhost:3000  (binds 0.0.0.0 for previews)
 ```
 
-## Tests and checks
+That is it. On first boot the app creates `.data/tech-pulse.db` (SQLite via Node's built-in `node:sqlite`), applies the schema, seeds 14 hackathons, 23 journey places and a small community, and starts the reminder worker.
 
-Run `npm run typecheck`, `npm run lint`, `npm test`, `npm run e2e`, and `npm run audit`. The CI workflow runs these checks plus secret scanning. `npm run lint` intentionally uses the strict TypeScript check because the legacy Next ESLint bridge is incompatible with the installed flat-config toolchain; production builds skip that bridge and still run Next type validation.
+Other useful commands:
 
-## Vercel
+| Command | Purpose |
+| --- | --- |
+| `npm run dev:host -- --port 3001` | Bind to `0.0.0.0` on a custom port (also accepts `npm run dev:host -- 3001`) |
+| `npm run build && npm start` | Production build + custom server |
+| `npm run typecheck` | Strict TypeScript check |
+| `npm run lint` | Runtime-hazard ESLint rules (`tsc` covers the rest) |
+| `npm test` | Unit tests for crypto, validation, CSRF and rate limiting |
+| `npm run e2e` | Full API/flow smoke test against a running server |
+| `npm run db:reset` | Wipe and re-seed the local database |
+| `npm run audit` | Production dependency audit |
 
-Set the variables in `.env.example`, including `NEXT_PUBLIC_SITE_URL`, Supabase, Turnstile, Upstash, KMS, and OAuth flags. Configure exact Supabase OAuth redirect URLs to `${NEXT_PUBLIC_SITE_URL}/auth/callback`. Deploy with a committed lockfile and run migrations before opening traffic.
+### Demo accounts (development only)
+
+| Account | Email | Password | Notes |
+| --- | --- | --- | --- |
+| Builder | `demo@techpulse.dev` | `PulseDemo!2026` | Seeded applications, calendar, teams, trip and inbox |
+| Admin (MFA) | `admin@techpulse.dev` | `AdminPulse!2026` | Requires the TOTP step; the current code is shown on the sign-in screen in dev |
+
+The login screen has one-click shortcuts. Demo accounts are **never** seeded when `NODE_ENV=production` (unless `ALLOW_DEMO_ACCOUNTS=true` is set deliberately).
+
+---
+
+## What was fixed
+
+The repository originally contained **only a README** describing a Next.js + Supabase app — none of the referenced source, migrations, routes or tests existed. Everything described below was implemented from scratch as a single coherent codebase, with the security gaps in the original concept closed rather than documented as future work.
+
+---
+
+## Architecture
+
+```
+Browser (Next.js App Router, React 19, Tailwind)
+   │  HTTPS REST  /api/v1/*  (same-origin, CSRF-protected)
+   │  WSS         /ws        (one-time ticket, one shared socket)
+   ▼
+Custom Node server (server.ts) ── next() handler + ws hub + reminder worker
+   │
+   ├─ /api/v1/[[...path]]  → one router with Zod validation, auth, rate limits
+   ├─ src/server/routes/*  → auth, users, catalog, applications, social, planning, admin
+   ├─ src/server/db.ts     → SQLite schema + idempotent curated seed
+   ├─ src/server/crypto.ts → Argon2id, AES-256-GCM, HKDF, TOTP, signed tokens
+   └─ src/lib/client-crypto.ts → WebCrypto E2EE + 2-step vault (browser side)
+```
+
+**Why one app:** the spec suggested a Next.js + NestJS + Postgres + Redis + BullMQ monorepo. That is appropriate at scale, but here it would mean two servers, two type surfaces and infrastructure that cannot run in this environment. A single Next.js app with a custom server for WebSockets delivers every feature with zero redundancy: one shared type file (`src/lib/types.ts`), one API router, one encrypted-message write path (`src/server/messages.ts`) shared by WebSocket and REST, one realtime connection per browser, one SQLite database with FK-enforced relations.
+
+### Data model
+
+`users`, `user_settings`, `vaults`, `devices`, `sessions`, `refresh_tokens`, `ws_tickets`, `audit_log`, `hackathons`, `bookmarks`, `apply_clicks`, `applications`, `teams`, `team_members`, `team_requests`, `seekers`, `conversations`, `conversation_members`, `messages`, `calendar_events`, `reminders`, `notifications`, `push_subscriptions`, `trips`, `trip_saved_places`, `journey_places`, `ingest_log`.
+
+---
+
+## Features
+
+1. **Auth & 2FA** — Argon2id passwords, email verification, TOTP setup with QR + recovery codes, MFA-gated admin, 15-minute sessions with rotating refresh tokens, session list/revoke, password reset, audit log.
+2. **User settings & 2-step encrypted storage** — profile, notification/privacy/theme preferences, data export, account deletion. Private vault data is encrypted **in the browser** (PBKDF2-SHA256 210k → AES-256-GCM) and then **again on the server** (AES-256-GCM with a per-user HKDF key). Application and calendar notes use the same server-side envelope.
+3. **Hackathons** — search, filters (format, city, tag, status, sort), pagination, facets, detail pages, bookmarks, and a logged `/apply-link` that validates HTTPS before a 302 redirect to the organiser.
+4. **Inbox / applications** — "I applied" tracking with four statuses, encrypted notes, unified inbox of applications, notifications and team requests; auto-adds deadline + event dates to the calendar.
+5. **Collaborate** — team listings per hackathon, skill-matched seekers, join requests, accept/reject, member removal with chat-key rotation, and automatic encrypted conversation creation on acceptance.
+6. **Secure chat over WebSockets** — non-extractable P-256 device key in IndexedDB, ECDH→HKDF wrapping of a random AES-256-GCM conversation key per member, fresh nonce per message, typing, presence, read receipts, cursor pagination, key rotation, and a ciphertext-only REST fallback. The server stores **only ciphertext**.
+7. **Calendar & reminders** — month grid, study/apply/hackathon/travel blocks, configurable 7d/1d/2h offsets, idempotent server-side reminder worker, in-app + browser notifications and a subscribable ICS feed.
+8. **Journey tips** — trip creation, generated route with distance/time, ranked food/fuel/rest/ATM stops (rating, detour, open-now), saved stops, an SVG route map and a travel checklist.
+9. **Admin & ingestion** — MFA-gated console with stats, audit trail, manual CRUD, reminder sweep and an optional HTTPS JSON feed (validated, `approval_status=approved` only, deduplicated by URL, 5-minute cache).
+
+### Routes
+
+`/` · `/hackathons` · `/hackathons/[slug]` · `/saved` · `/inbox` · `/collaborate` · `/chat` · `/chat/[conversationId]` · `/calendar` · `/journey` · `/learn` · `/settings` · `/login` · `/admin` · `/about` · `/privacy`
+
+### API (`/api/v1`)
+
+All resources from the concept are implemented behind a single catch-all router: `auth/*` (register, login, refresh, logout, verify-email, forgot/reset, 2fa setup/confirm/verify/disable, sessions, ws-ticket), `users/me` (+ settings, vault, devices, public-keys, export), `hackathons` (+ bookmark, apply-link), `applications`, `inbox`, `teams`, `seekers`, `team-requests`, `conversations` (+ messages, keys, rotate-key, read), `calendar` (+ sync-hackathon, ics), `notifications`, `push/subscribe`, `trips` (+ route, suggestions, checklist, save), `facets`, `search`, `health`, `admin/*`. Responses share one error shape `{ error, code?, details? }`.
+
+---
+
+## Security
+
+| Area | Implementation |
+| --- | --- |
+| Passwords | Argon2id (64 MiB, t=3, p=1), per-user salt, dummy hash for unknown accounts |
+| Sessions | Opaque random tokens stored hashed, HttpOnly + SameSite=Lax + Secure-in-prod cookies, rotation revokes the previous refresh token |
+| CSRF | Same-origin check **plus** session-bound double-submit token on every write |
+| WebSocket | One-time 30-second ticket (never a session cookie in a URL), cross-origin handshake rejection, per-socket rate limit, heartbeat |
+| Input | Zod schemas, 32 KB body cap, strict URL validation, parameterised SQL everywhere |
+| Headers | CSP with per-request nonce in production (dev relaxes only for HMR), COOP, CORP, Referrer-Policy, Permissions-Policy, HSTS, nosniff; `frame-ancestors` allows the Arena preview iframe |
+| Encryption | AES-256-GCM envelopes, HKDF per-user data keys, encrypted TOTP secrets, hashed recovery codes, E2EE chat |
+| Authorisation | Every private route re-checks the session; admin additionally requires `role=admin` **and** `aal2`; no role-update endpoint exists |
+| Limiting | Sliding-window in-process limiter on auth, writes, clicks and the global API |
+| Audit | Login failures, MFA events, admin actions, vault writes, apply clicks, account deletion |
+
+Production hardening still required: put the limiter on Redis/Upstash, wire a mail + VAPID push provider, store the master key in a KMS, use a managed Postgres, and set `NODE_ENV=production` with the secrets below.
+
+### Environment
+
+Copy `.env.example` → `.env.local`. All values are optional in development.
+
+| Variable | Meaning |
+| --- | --- |
+| `DATA_ENCRYPTION_KEY` | 32-byte hex master key for server-side AES-256-GCM / HKDF (required in prod) |
+| `AUTH_SIGNING_KEY` | 32-byte hex key for MFA challenges and short-lived tokens (required in prod) |
+| `NEXT_PUBLIC_SITE_URL`, `HOST`, `PORT` | Public origin and bind address |
+| `OPPORTUNITIES_SHEET_FEED_URL` | Optional HTTPS JSON feed of hackathon rows |
+| `OSRM_BASE_URL`, `OVERPASS_BASE_URL` | Reserved for live routing/places providers |
+| `ALLOW_DEMO_ACCOUNTS` | Set `true` to seed demo accounts in production (not recommended) |
+
+Generate secrets with `node -e "console.log(require('node:crypto').randomBytes(32).toString('hex'))"`.
+
+---
+
+## Tests & CI
+
+`npm test` covers AES-GCM round-trip and tamper detection, per-user key isolation, Argon2id, RFC 6238 TOTP vectors, signed-token expiry, CSRF/same-origin rejection, Zod validation, body caps, HTTPS redirect validation, rate limiting and mapping defaults. `npm run e2e` exercises the complete register → verify → apply → inbox → calendar → trip → encrypted message → logout flow against a live server. GitHub Actions runs typecheck, lint, unit tests and a production build.
+
+---
+
+## Assumptions (sensible defaults, no questions asked)
+
+1. **Zero-infrastructure runtime.** SQLite via `node:sqlite` and an in-process reminder worker replace Postgres/Redis/BullMQ so the app runs immediately. The interfaces are isolated so swapping them is a one-file change.
+2. **No third-party credentials.** Email verification/reset codes appear in the UI in development; production needs a mail provider. Web push uses browser notifications + stored subscriptions rather than a live push service.
+3. **Journey data is curated and offline.** The sandbox has no access to Google Places/OSRM, so routes and food/fuel/rest suggestions come from a local seeded dataset with deterministic geo-projections. Provider URLs are reserved in `.env.example`.
+4. **P-256 ECDH instead of X25519** for device keys, because P-256 is universally supported by WebCrypto today; HKDF-SHA256 and AES-256-GCM are unchanged.
+5. **Demo seed accounts** exist only outside production, with credentials shown on the sign-in screen for instant evaluation.
+6. **Preview iframe compatibility.** CSP `frame-ancestors` includes `https://*.e2b.app`; remove it (and set `X-Frame-Options: DENY`) on a self-hosted deployment.
+7. **Chat key recovery.** A lost device loses its history — the honest consequence of real E2EE. An encrypted key backup would require a passphrase escrow design and was intentionally left out of this build.
+8. **Admin promotion stays manual SQL.** No public role-update path exists, matching the original security note: `update public.profiles set role = 'admin' ...` becomes `update users set role='admin' where id='<verified-user-id>'`.

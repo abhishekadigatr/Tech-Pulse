@@ -1,0 +1,12 @@
+{
+  "name": "Tech Pulse — Hackathon OS",
+  "short_name": "Tech Pulse",
+  "description": "Hackathon discovery, secure collaboration and journey planning.",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#060912",
+  "theme_color": "#060912",
+  "icons": [
+    { "src": "/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any maskable" }
+  ]
+}
