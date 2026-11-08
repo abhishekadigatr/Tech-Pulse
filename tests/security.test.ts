@@ -75,3 +75,12 @@ test('settings and hackathon mapping provide safe defaults', () => {
   assert.deepEqual(hackathon.tags, ['AI']);
   assert.equal(hackathon.bookmarked, false);
 });
+
+test('same-origin ignores forged forwarded hosts and checks scheme', () => {
+  assert.throws(() => assertSameOrigin(req('http://localhost:3000/x', {
+    method: 'POST', headers: { origin: 'https://evil.example', 'x-forwarded-host': 'evil.example' },
+  })), /Cross-origin/);
+  assert.throws(() => assertSameOrigin(req('http://localhost:3000/x', {
+    method: 'POST', headers: { origin: 'https://localhost:3000' },
+  })), /Cross-origin/);
+});

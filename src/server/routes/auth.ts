@@ -3,17 +3,18 @@ import { z } from 'zod';
 import QRCode from 'qrcode';
 import {
   audit, consumeRecoveryCode, createAuthCookies, issueWsTicket, mfaChallenge,
-  readMfaChallenge, revokeAuth, revokeSession, rotateAuth, sessionsFor, userByEmail,
+  readMfaChallenge, revokeAllSessions, revokeAuth, revokeSession, rotateAuth, sessionsFor, userByEmail,
   userById, verifyRecoveryCode, type AuthCookies, type UserRow,
 } from '../auth.ts';
-import { ADMIN_EMAIL, ADMIN_PASSWORD, ADMIN_TOTP_SECRET, DEMO_EMAIL, DEMO_PASSWORD, get, run, uid } from '../db.ts';
+import { get, run, uid } from '../db.ts';
 import {
-  currentTotp, hashPassword, newTotpSecret, openSystem, otpauthUrl, randomToken,
+  hashPassword, newTotpSecret, openSystem, otpauthUrl, randomToken,
   recoveryCodes, sealSystem, sha256, verifyPassword, verifyTotp,
 } from '../crypto.ts';
 import { clientIp, conflict, json, notFound, withCookies } from '../http.ts';
-import { limit, ok, publicWrite, readBody, requireAuth, Routes, write, type Ctx } from '../router.ts';
+import { enforceApiAccess, limit, ok, publicWrite, readBody, requireAuth, Routes, write, type Ctx } from '../router.ts';
 import { toMe } from '../repo.ts';
+import { getHub } from '../ws-hub.ts';
 import {
   confirm2faSchema, disable2faSchema, email, emailCodeSchema, loginSchema, mfaSchema,
   registerSchema, resetSchema,
@@ -44,12 +45,10 @@ export async function handleAuth(ctx: Ctx): Promise<Response | null> {
   });
 
   r.get('/auth/dev-hint', () => {
-    if (!dev()) return notFound();
-    return ok({
-      demo: { email: DEMO_EMAIL, password: DEMO_PASSWORD },
-      admin: { email: ADMIN_EMAIL, password: ADMIN_PASSWORD, totpCode: currentTotp(ADMIN_TOTP_SECRET) },
-      note: 'Development-only shortcut. Demo accounts are never seeded in production.',
-    });
+    if (!dev() || process.env.SEED_DEMO !== '1') return notFound();
+    const { DEMO_EMAIL, DEMO_PASSWORD, ADMIN_EMAIL, ADMIN_PASSWORD } = process.env;
+    if (!DEMO_EMAIL || !DEMO_PASSWORD || !ADMIN_EMAIL || !ADMIN_PASSWORD) return notFound();
+    return ok({ demo: { email: DEMO_EMAIL, password: DEMO_PASSWORD }, admin: { email: ADMIN_EMAIL, password: ADMIN_PASSWORD } });
   });
 
   r.get('/health', () => ok({ status: 'ok', time: Date.now(), version: '1.0.0' }));
@@ -120,6 +119,14 @@ export async function handleAuth(ctx: Ctx): Promise<Response | null> {
   r.post('/auth/logout', ({ ctx: c }) => {
     publicWrite(c);
     if (c.auth) audit(c.auth.user.id, 'auth.logout', c.request);
+    return withCookies(ok({ ok: true }), revokeAuth(c.request));
+  });
+
+  r.post('/auth/logout-everywhere', ({ ctx: c }) => {
+    const auth = write(c);
+    revokeAllSessions(auth.user.id);
+    getHub()?.disconnectUser(auth.user.id);
+    audit(auth.user.id, 'auth.logout_everywhere', c.request);
     return withCookies(ok({ ok: true }), revokeAuth(c.request));
   });
 
@@ -217,6 +224,7 @@ export async function handleAuth(ctx: Ctx): Promise<Response | null> {
 
   r.post('/auth/ws-ticket', ({ ctx: c }) => {
     const auth = write(c);
+    enforceApiAccess({ ...c, path: '/conversations' });
     return ok({ ticket: issueWsTicket(auth.user.id), expiresIn: 30 });
   });
 

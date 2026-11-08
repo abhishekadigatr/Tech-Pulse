@@ -25,7 +25,7 @@ export default function SettingsPage() {
 function SettingsContent() {
   const { me, refreshMe, logout } = useAuth();
   const { toast } = useToast();
-  const [tab, setTab] = useState('profile');
+  const [tab, setTab] = useState(() => !me?.totpEnabled ? 'security' : 'profile');
   const [profile, setProfile] = useState({ name: me?.name ?? '', college: me?.college ?? '', city: me?.city ?? '', skills: (me?.skills ?? []).join(', '), bio: me?.bio ?? '' });
   const [prefs, setPrefs] = useState<UserSettings | null>(me?.settings ?? null);
   const [busy, setBusy] = useState(false);
@@ -60,10 +60,11 @@ function SettingsContent() {
         </div>
       </div>
 
-      <Tabs tabs={[
+      {!me.totpEnabled && <div className="rounded-xl border border-amber/30 p-4 text-sm text-amber">Set up two-factor authentication to access your workspace and settings.</div>}
+      {me.totpEnabled && <Tabs tabs={[
         { id: 'profile', label: 'Profile' }, { id: 'preferences', label: 'Preferences' },
         { id: 'security', label: 'Security' }, { id: 'vault', label: 'Private vault' }, { id: 'data', label: 'Your data' },
-      ]} active={tab} onChange={setTab} />
+      ]} active={tab} onChange={setTab} />}
 
       {tab === 'profile' && (
         <Card className="p-6"><SectionHeader eyebrow="Public profile" title="How teammates see you" subtitle="Visible according to your privacy setting. Used for teammate matching." />
@@ -166,7 +167,7 @@ function SecurityTab({ me, refreshMe, logout }: { me: Me; refreshMe: () => Promi
               {!s.current && <Button size="sm" variant="ghost" onClick={async () => { try { await api(`/auth/sessions/${s.id}`, { method: 'DELETE' }); sessions.reload(); toast('Session revoked'); } catch { toast('Could not revoke', 'error'); } }}><LogOut size={13} /></Button>}
             </div>
           ))}</div>}
-          <Button variant="danger" className="mt-4" onClick={async () => { try { await api('/auth/logout', { method: 'POST' }); await logout(); } catch { /* ignore */ } }}><LogOut size={14} /> Sign out everywhere (this device)</Button>
+          <Button variant="danger" className="mt-4" onClick={async () => { try { await api('/auth/logout-everywhere', { method: 'POST' }); await logout(); } catch { toast('Could not sign out everywhere', 'error'); } }}><LogOut size={14} /> Sign out everywhere</Button>
         </Card>
         <Card className="p-6"><SectionHeader eyebrow="Password" title="Login credentials" /><p className="text-xs leading-relaxed text-slate-400">Passwords are hashed with Argon2id (64 MiB, 3 iterations) and a per-user salt. Login is rate-limited and uses a dummy hash for unknown accounts to avoid timing enumeration.</p>
           <div className="mt-4 flex flex-wrap gap-2"><Badge tone="cyan">Argon2id</Badge><Badge tone="violet">HttpOnly cookies</Badge><Badge tone="lime">CSRF tokens</Badge></div></Card>

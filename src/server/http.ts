@@ -90,14 +90,17 @@ export function clientIp(request: Request): string {
 export function assertSameOrigin(request: Request): void {
   const origin = request.headers.get('origin');
   if (!origin) return; // non-browser clients rely on the CSRF token below
-  let originHost: string;
+  let actual: string;
+  let expected: string;
   try {
-    originHost = new URL(origin).host;
+    actual = new URL(origin).origin;
+    const configured = process.env.APP_ORIGIN;
+    if (!configured && process.env.NODE_ENV === 'production') forbidden('APP_ORIGIN must be configured');
+    expected = new URL(configured || request.url).origin;
   } catch {
-    forbidden('Invalid origin');
+    forbidden('Invalid origin or APP_ORIGIN');
   }
-  const host = request.headers.get('x-forwarded-host') || request.headers.get('host') || '';
-  if (originHost !== host) forbidden('Cross-origin request rejected');
+  if (actual !== expected || origin !== actual) forbidden('Cross-origin request rejected');
 }
 
 /** CSRF defence #2: double-submit token bound to the server-side session. */

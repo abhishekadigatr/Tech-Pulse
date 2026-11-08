@@ -1,6 +1,7 @@
 import { z } from 'zod';
+import { apiAccessDecision } from '../lib/access.ts';
 import { getAuth, type AuthContext } from './auth.ts';
-import { assertCsrf, assertSameOrigin, body, forbidden, json, notFound, rateLimit, unauthorized } from './http.ts';
+import { ApiException, assertCsrf, assertSameOrigin, body, forbidden, json, notFound, rateLimit, unauthorized } from './http.ts';
 
 export interface Ctx {
   request: Request;
@@ -26,6 +27,14 @@ export function ctxFrom(request: Request, segments: string[]): Ctx {
     url: new URL(request.url),
     auth: getAuth(request),
   };
+}
+
+export function enforceApiAccess(ctx: Ctx): void {
+  const state = ctx.auth ? { totpEnabled: Boolean(ctx.auth.user.totp_enabled), aal2: Boolean(ctx.auth.session.aal2) } : null;
+  const decision = apiAccessDecision(ctx.path, state);
+  if (decision === 'login') unauthorized('Please sign in to continue');
+  if (decision === 'enroll') throw new ApiException(403, 'Enroll in two-factor authentication in settings', 'MFA_ENROLL_REQUIRED', { redirect: '/settings?enroll=2fa' });
+  if (decision === 'step-up') throw new ApiException(403, 'Sign in again with two-factor authentication', 'AAL2_REQUIRED', { redirect: '/login?stepup=1' });
 }
 
 export function requireAuth(ctx: Ctx): AuthContext {

@@ -13,7 +13,7 @@ npm install
 npm run dev            # http://localhost:3000  (binds 0.0.0.0 for previews)
 ```
 
-That is it. On first boot the app creates `.data/tech-pulse.db` (SQLite via Node's built-in `node:sqlite`), applies the schema, seeds 14 hackathons, 23 journey places and a small community, and starts the reminder worker.
+That is it. On first boot the app creates `.data/tech-pulse.db` (SQLite via Node's built-in `node:sqlite`), applies the schema, seeds 14 hackathons and 23 journey places, and starts the reminder worker.
 
 Other useful commands:
 
@@ -30,12 +30,7 @@ Other useful commands:
 
 ### Demo accounts (development only)
 
-| Account | Email | Password | Notes |
-| --- | --- | --- | --- |
-| Builder | `demo@techpulse.dev` | `PulseDemo!2026` | Seeded applications, calendar, teams, trip and inbox |
-| Admin (MFA) | `admin@techpulse.dev` | `AdminPulse!2026` | Requires the TOTP step; the current code is shown on the sign-in screen in dev |
-
-The login screen has one-click shortcuts. Demo accounts are **never** seeded when `NODE_ENV=production` (unless `ALLOW_DEMO_ACCOUNTS=true` is set deliberately).
+Demo users are disabled by default and are never seeded in production. To opt in for a fresh development database, set `SEED_DEMO=1` and set `DEMO_EMAIL`, `DEMO_PASSWORD`, `ADMIN_EMAIL`, and `ADMIN_PASSWORD` in `.env.local` to disposable values. The development-only hint endpoint exposes these credentials to local clients, so do not enable this on a public server. Both users must enroll in 2FA through Settings before accessing the workspace; no TOTP code is displayed by the server. Existing databases are not automatically reseeded or scrubbed: remove old demo accounts and rotate any previously published credentials before deploying an existing database.
 
 ---
 
@@ -119,7 +114,9 @@ Copy `.env.example` → `.env.local`. All values are optional in development.
 | `NEXT_PUBLIC_SITE_URL`, `HOST`, `PORT` | Public origin and bind address |
 | `OPPORTUNITIES_SHEET_FEED_URL` | Optional HTTPS JSON feed of hackathon rows |
 | `OSRM_BASE_URL`, `OVERPASS_BASE_URL` | Reserved for live routing/places providers |
-| `ALLOW_DEMO_ACCOUNTS` | Set `true` to seed demo accounts in production (not recommended) |
+| `SEED_DEMO`, `DEMO_EMAIL`, `DEMO_PASSWORD`, `ADMIN_EMAIL`, `ADMIN_PASSWORD` | Opt-in disposable development accounts; ignored in production |
+| `APP_ORIGIN` | Canonical public origin for CSRF checks; required in production |
+| `FRAME_ANCESTORS` | CSP framing sources; defaults to `'self'`. For Arena preview use `'self' https://*.e2b.app`; external sources omit X-Frame-Options |
 
 Generate secrets with `node -e "console.log(require('node:crypto').randomBytes(32).toString('hex'))"`.
 
@@ -137,7 +134,7 @@ Generate secrets with `node -e "console.log(require('node:crypto').randomBytes(3
 2. **No third-party credentials.** Email verification/reset codes appear in the UI in development; production needs a mail provider. Web push uses browser notifications + stored subscriptions rather than a live push service.
 3. **Journey data is curated and offline.** The sandbox has no access to Google Places/OSRM, so routes and food/fuel/rest suggestions come from a local seeded dataset with deterministic geo-projections. Provider URLs are reserved in `.env.example`.
 4. **P-256 ECDH instead of X25519** for device keys, because P-256 is universally supported by WebCrypto today; HKDF-SHA256 and AES-256-GCM are unchanged.
-5. **Demo seed accounts** exist only outside production, with credentials shown on the sign-in screen for instant evaluation.
-6. **Preview iframe compatibility.** CSP `frame-ancestors` includes `https://*.e2b.app`; remove it (and set `X-Frame-Options: DENY`) on a self-hosted deployment.
+5. **Demo seed accounts** are opt-in and restricted to development; credentials come from the environment.
+6. **Framing and origins.** Framing defaults to same-origin. Set `FRAME_ANCESTORS` to explicitly allow external embedding and `APP_ORIGIN` to the public origin for preview or reverse-proxy deployments. Development defaults to `http://localhost:<port>`. Restart the custom server after changing these values.
 7. **Chat key recovery.** A lost device loses its history — the honest consequence of real E2EE. An encrypted key backup would require a passphrase escrow design and was intentionally left out of this build.
 8. **Admin promotion stays manual SQL.** No public role-update path exists, matching the original security note: `update public.profiles set role = 'admin' ...` becomes `update users set role='admin' where id='<verified-user-id>'`.
