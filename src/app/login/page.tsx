@@ -57,6 +57,7 @@ export default function LoginPage() {
     } catch (err) {
       const e = err as { message?: string; code?: string };
       setError(e.message ?? 'Something went wrong');
+      if (e.code === 'MAIL_UNAVAILABLE') { setMode('verify'); setNotice('Request a new verification code when delivery is available.'); }
       if (e.code === 'EMAIL_UNVERIFIED') { setMode('verify'); setNotice('Verify your email to continue.'); }
     } finally { setBusy(false); }
   };
@@ -110,6 +111,13 @@ export default function LoginPage() {
             {mode !== 'mfa' && <Field label="Email"><div className="relative"><Mail size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-500" /><Input value={email} onChange={(e) => setEmail(e.target.value)} placeholder="you@college.edu" type="email" autoComplete="email" className="!pl-9" /></div></Field>}
             {(mode === 'login' || mode === 'register' || mode === 'reset') && <Field label="Password" hint={mode === 'register' ? 'At least 10 characters with a letter and a number' : undefined}><div className="relative"><LockKeyhole size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-500" /><Input value={password} onChange={(e) => setPassword(e.target.value)} placeholder="••••••••••" type="password" autoComplete={mode === 'login' ? 'current-password' : 'new-password'} className="!pl-9" /></div></Field>}
             {(mode === 'verify' || mode === 'mfa' || mode === 'reset') && <Field label={mode === 'mfa' ? 'Authenticator / recovery code' : '6-digit code'}><div className="relative"><KeyRound size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-500" /><Input value={code} onChange={(e) => setCode(e.target.value)} placeholder="000000" inputMode="numeric" className="!pl-9 font-mono tracking-widest" maxLength={20} /></div></Field>}
+            {mode === 'verify' && <button type="button" className="text-xs text-cyan hover:underline" onClick={async () => {
+              try {
+                const result = await api<{ message: string; devCode?: string }>('/auth/resend-verification', { method: 'POST', body: { email } });
+                if (result.devCode) setCode(result.devCode);
+                setNotice(result.message); setError(null);
+              } catch (err) { setError(err instanceof Error ? err.message : 'Could not resend'); }
+            }}>Resend verification code</button>}
             {error && <ErrorNote message={error} />}
             {notice && <SuccessNote><span>{notice}</span></SuccessNote>}
             <Button variant="primary" className="w-full !py-3" loading={busy} onClick={() => void submit()}>

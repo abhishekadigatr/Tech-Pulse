@@ -1,7 +1,7 @@
 import { audit } from '../auth.ts';
 import { all, run, uid } from '../db.ts';
 import { clampInt, clientIp, notFound, safeExternalUrl } from '../http.ts';
-import { limit, ok, requireAuth, Routes, write, type Ctx } from '../router.ts';
+import { ok, requireAuth, Routes, write, type Ctx } from '../router.ts';
 import { facets, hackathonRow, listHackathons, parseJson, toHackathon } from '../repo.ts';
 
 export async function handleCatalog(ctx: Ctx): Promise<Response | null> {
@@ -65,7 +65,6 @@ export async function handleCatalog(ctx: Ctx): Promise<Response | null> {
     if (!row) return notFound('Hackathon not found');
     const target = safeExternalUrl(row.apply_url) ?? safeExternalUrl(row.official_url);
     if (!target) return notFound('This listing has no valid external link');
-    limit(`apply:${clientIp(c.request)}`, 60, 60_000);
     run('INSERT INTO apply_clicks (id,user_id,hackathon_id,ip_hash,created_at) VALUES (?,?,?,?,?)',
       uid('clk'), auth.user.id, row.id, clientIp(c.request), Date.now());
     audit(auth.user.id, 'hackathon.apply_click', c.request, row.id);

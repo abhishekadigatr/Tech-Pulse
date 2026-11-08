@@ -101,7 +101,7 @@ All resources from the concept are implemented behind a single catch-all router:
 | Limiting | Sliding-window in-process limiter on auth, writes, clicks and the global API |
 | Audit | Login failures, MFA events, admin actions, vault writes, apply clicks, account deletion |
 
-Production hardening still required: put the limiter on Redis/Upstash, wire a mail + VAPID push provider, store the master key in a KMS, use a managed Postgres, and set `NODE_ENV=production` with the secrets below.
+Production requires SMTP credentials and the secrets below. Configure a VAPID push provider separately, store secrets securely, and use a durable SQLite volume and backups. The optional SQLite rate-limit store survives restarts.
 
 ### Environment
 
@@ -115,8 +115,13 @@ Copy `.env.example` → `.env.local`. All values are optional in development.
 | `OPPORTUNITIES_SHEET_FEED_URL` | Optional HTTPS JSON feed of hackathon rows |
 | `OSRM_BASE_URL`, `OVERPASS_BASE_URL` | Reserved for live routing/places providers |
 | `SEED_DEMO`, `DEMO_EMAIL`, `DEMO_PASSWORD`, `ADMIN_EMAIL`, `ADMIN_PASSWORD` | Opt-in disposable development accounts; ignored in production |
+| `SMTP_URL`, `MAIL_FROM` | SMTP provider URL and sender; required in production |
+| `RATE_LIMIT_STORE` | `memory` (default) or `sqlite` for persistent rate limits |
+| `TRUSTED_PROXY` | Set to `1` only when a trusted proxy strips and rewrites X-Forwarded-For |
 | `APP_ORIGIN` | Canonical public origin for CSRF checks; required in production |
 | `FRAME_ANCESTORS` | CSP framing sources; defaults to `'self'`. For Arena preview use `'self' https://*.e2b.app`; external sources omit X-Frame-Options |
+
+SMTP uses TLS (STARTTLS for `smtp:`). Verification/reset codes expire after 15 minutes, allow five attempts and have a 60-second resend cooldown. Existing unverified accounts must request a new verification code after upgrading.
 
 Generate secrets with `node -e "console.log(require('node:crypto').randomBytes(32).toString('hex'))"`.
 
@@ -131,7 +136,7 @@ Generate secrets with `node -e "console.log(require('node:crypto').randomBytes(3
 ## Assumptions (sensible defaults, no questions asked)
 
 1. **Zero-infrastructure runtime.** SQLite via `node:sqlite` and an in-process reminder worker replace Postgres/Redis/BullMQ so the app runs immediately. The interfaces are isolated so swapping them is a one-file change.
-2. **No third-party credentials.** Email verification/reset codes appear in the UI in development; production needs a mail provider. Web push uses browser notifications + stored subscriptions rather than a live push service.
+2. **No third-party credentials.** Without SMTP, verification/reset codes appear in the UI only in development. Production requires SMTP_URL and MAIL_FROM; configure a provider such as Brevo. Web push uses browser notifications + stored subscriptions rather than a live push service.
 3. **Journey data is curated and offline.** The sandbox has no access to Google Places/OSRM, so routes and food/fuel/rest suggestions come from a local seeded dataset with deterministic geo-projections. Provider URLs are reserved in `.env.example`.
 4. **P-256 ECDH instead of X25519** for device keys, because P-256 is universally supported by WebCrypto today; HKDF-SHA256 and AES-256-GCM are unchanged.
 5. **Demo seed accounts** are opt-in and restricted to development; credentials come from the environment.

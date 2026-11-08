@@ -94,7 +94,7 @@ export class Routes {
       if (!matched) continue;
       const auth = this.ctx.auth;
       if (!auth && this.ctx.method !== 'GET' && this.ctx.method !== 'HEAD' &&
-          !['/auth/login', '/auth/register', '/auth/refresh', '/auth/verify-email', '/auth/forgot-password', '/auth/reset-password', '/auth/2fa/verify', '/health'].includes(this.ctx.path)) {
+          !['/auth/login', '/auth/register', '/auth/refresh', '/auth/verify-email', '/auth/resend-verification', '/auth/forgot-password', '/auth/reset-password', '/auth/2fa/verify', '/health'].includes(this.ctx.path)) {
         unauthorized('Please sign in to continue');
       }
       return entry.handler({ ctx: this.ctx, params, auth: auth as AuthContext });
