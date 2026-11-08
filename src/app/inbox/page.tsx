@@ -7,7 +7,9 @@ import {
 } from 'lucide-react';
 import { useState } from 'react';
 import { api, useApi } from '@/lib/api-client';
-import { useToast } from '@/components/providers';
+import { useAuth, useToast } from '@/components/providers';
+import { NotesUnlock, useNotesKey, useReadableNotes } from '@/components/NotesUnlock';
+import { encryptNote } from '@/lib/crypto';
 import { AuthGate as Gate } from '@/components/AppShell';
 import { Badge, Button, Card, Countdown, EmptyState, Field, Loading, SectionHeader, Select, Stat, Tabs, Textarea, cn } from '@/components/ui';
 import { fmtDateTime, hueColor, relative, statusLabel } from '@/lib/format';
@@ -19,6 +21,8 @@ export default function InboxPage() {
 
 function InboxContent() {
   const { toast } = useToast();
+  const { me } = useAuth();
+  const noteKey = useNotesKey(me?.id);
   const [tab, setTab] = useState('all');
   const apps = useApi<{ items: Application[] }>('/applications');
   const inbox = useApi<{ items: InboxItem[] }>('/inbox');
@@ -27,6 +31,7 @@ function InboxContent() {
   const [draft, setDraft] = useState({ status: 'applied' as ApplicationStatus, notes: '' });
   const [busy, setBusy] = useState(false);
 
+  const readable = useReadableNotes(apps.data?.items, noteKey.key);
   const applications = apps.data?.items ?? [];
   const items = inbox.data?.items ?? [];
   const pending = (requests.data?.items ?? []).filter((r) => r.status === 'pending');
@@ -34,12 +39,13 @@ function InboxContent() {
 
   const refresh = () => { apps.reload(); inbox.reload(); requests.reload(); };
 
-  const openEditor = (a: Application) => { setEditing(a.id); setDraft({ status: a.status, notes: a.notes }); };
+  const openEditor = (a: Application) => { const note = readable[a.id]; if (!note || note.locked || note.failed) { toast('Unlock your notes before editing', 'error'); return; } setEditing(a.id); setDraft({ status: a.status, notes: note.text }); };
 
   const save = async (id: string) => {
     setBusy(true);
     try {
-      await api(`/applications/${id}`, { method: 'PATCH', body: draft });
+      if (draft.notes && !noteKey.key) throw new Error('Unlock notes before saving');
+      await api(`/applications/${id}`, { method: 'PATCH', body: { ...draft, notes: draft.notes ? await encryptNote(noteKey.key!, draft.notes) : '' } });
       toast('Application updated · notes re-encrypted');
       setEditing(null); refresh();
     } catch (err) { toast(err instanceof Error ? err.message : 'Could not update', 'error'); }
@@ -72,12 +78,13 @@ function InboxContent() {
         <div className="relative flex flex-wrap items-end justify-between gap-4">
           <div><Badge tone="violet"><Inbox size={11} /> Unified inbox</Badge>
             <h1 className="mt-3 text-3xl font-extrabold tracking-tight text-white">Everything that needs <span className="glow-text">your attention.</span></h1>
-            <p className="mt-2 max-w-2xl text-sm text-slate-400">Applications, updates and teammate requests in one stream. Notes are encrypted twice before they touch storage.</p>
+            <p className="mt-2 max-w-2xl text-sm text-slate-400">Applications, updates and teammate requests in one stream. New notes are encrypted in your browser. Older notes remain server-encrypted until edited.</p>
           </div>
           <Link href="/hackathons" className="btn btn-primary"><ExternalLink size={15} /> Find something to apply to</Link>
         </div>
       </div>
 
+      <NotesUnlock state={noteKey} />
       <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
         <Stat label="Applications" value={applications.length} hint="tracked" icon={<Sparkles size={16} />} tone="cyan" />
         <Stat label="Shortlisted" value={applications.filter((a) => a.status === 'shortlisted' || a.status === 'participating').length} hint="moving forward" icon={<Check size={16} />} tone="lime" />
@@ -141,7 +148,7 @@ function InboxContent() {
                   </div>
                 ) : (
                   <div className="mt-4 flex flex-wrap items-center justify-between gap-3">
-                    <p className="max-w-xl truncate text-xs text-slate-500">{a.notes ? <><span className="text-cyan">🔒</span> {a.notes}</> : <span className="italic">No private notes</span>}</p>
+                    <p className="max-w-xl truncate text-xs text-slate-500">{readable[a.id]?.locked ? '🔒 Unlock notes to read' : readable[a.id]?.failed ? 'Unable to decrypt this note' : readable[a.id]?.text ? <><span className="text-cyan">🔒</span> {readable[a.id].text}{readable[a.id].legacy && ' (legacy server-encrypted)'}</> : <span className="italic">No private notes</span>}</p>
                     <div className="flex gap-2">
                       <Button size="sm" onClick={() => openEditor(a)}>Edit & update</Button>
                       <Button size="sm" variant="ghost" onClick={() => void remove(a.id)} aria-label="Delete application"><Trash2 size={14} className="text-rose" /></Button>

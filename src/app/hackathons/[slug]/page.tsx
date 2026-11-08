@@ -7,6 +7,8 @@ import {
   ExternalLink, Globe2, Map, MapPin, ShieldCheck, Sparkles, Trophy, Users, Zap,
 } from 'lucide-react';
 import { useState } from 'react';
+import { NotesUnlock, useNotesKey } from '@/components/NotesUnlock';
+import { encryptNote } from '@/lib/crypto';
 import { api, useApi } from '@/lib/api-client';
 import { useAuth, useToast } from '@/components/providers';
 import { HackathonCard } from '@/components/HackathonCard';
@@ -27,6 +29,7 @@ export default function HackathonDetailPage() {
   const [applyOpen, setApplyOpen] = useState(false);
   const [status, setStatus] = useState<ApplicationStatus>('applied');
   const [notes, setNotes] = useState('');
+  const noteKey = useNotesKey(me?.id);
   const [busy, setBusy] = useState(false);
 
   if (detail.loading) return <div className="mx-auto max-w-5xl space-y-4"><div className="skeleton h-64 w-full rounded-2xl" /><Loading rows={3} /></div>;
@@ -54,7 +57,8 @@ export default function HackathonDetailPage() {
     if (!requireSignIn()) return;
     setBusy(true);
     try {
-      await api('/applications', { method: 'POST', body: { hackathonId: h.id, status, notes } });
+      if (notes && !noteKey.key) throw new Error('Unlock notes before saving');
+      await api('/applications', { method: 'POST', body: { hackathonId: h.id, status, notes: notes ? await encryptNote(noteKey.key!, notes) : '' } });
       toast('Added to your inbox · deadline added to calendar');
       setApplyOpen(false);
       detail.reload();
@@ -171,7 +175,7 @@ export default function HackathonDetailPage() {
             </Card>
             <Card className="p-5">
               <div className="flex items-center gap-2 text-xs font-bold text-cyan"><ShieldCheck size={14} /> Privacy first</div>
-              <p className="mt-2 text-xs leading-relaxed text-slate-500">Your application notes and calendar entries are encrypted twice: once in your browser and once on the server with a per-user key.</p>
+              <p className="mt-2 text-xs leading-relaxed text-slate-500">New application and calendar notes are encrypted in your browser. Older notes remain server-encrypted until edited.</p>
             </Card>
           </div>
         </div>
@@ -218,7 +222,8 @@ export default function HackathonDetailPage() {
           <Field label="Status"><Select value={status} onChange={(e) => setStatus(e.target.value as ApplicationStatus)}>
             {(['applied', 'shortlisted', 'participating', 'rejected'] as const).map((s) => <option key={s} value={s}>{statusLabel[s]}</option>)}
           </Select></Field>
-          <Field label="Private notes" hint="Encrypted twice before storage — only you can read these."><Textarea value={notes} onChange={(e) => setNotes(e.target.value)} placeholder="Team name, submission link, things to remember…" maxLength={2000} /></Field>
+          <NotesUnlock state={noteKey} />
+          <Field label="Private notes" hint="Encrypted in your browser with your notes passphrase."><Textarea value={notes} onChange={(e) => setNotes(e.target.value)} placeholder="Team name, submission link, things to remember…" maxLength={2000} /></Field>
           <div className="flex items-start gap-2 rounded-xl border border-cyan/20 bg-cyan/[.05] p-3 text-[11px] leading-relaxed text-slate-400"><CalendarDays size={14} className="mt-0.5 shrink-0 text-cyan" /> Saving also adds the application deadline and event dates to your calendar with reminders.</div>
           <div className="flex justify-end gap-2"><Button variant="ghost" onClick={() => setApplyOpen(false)}>Cancel</Button><Button variant="primary" loading={busy} onClick={() => void trackApplication()}>Save to inbox</Button></div>
         </div>

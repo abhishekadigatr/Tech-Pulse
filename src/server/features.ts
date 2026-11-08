@@ -1,6 +1,6 @@
 import { all, db, get, run, uid } from './db.ts';
 import { conflict } from './http.ts';
-import { sealForUser, openForUser } from './crypto.ts';
+import { openForUser } from './crypto.ts';
 import { getHub } from './ws-hub.ts';
 import {
   hackathonRow, parseJson, publicUserById, settingsFor, toHackathon,
@@ -287,12 +287,13 @@ interface CalendarRow {
 }
 
 export function toCalendarEvent(row: CalendarRow): CalendarEvent {
-  let notes = '';
-  try { notes = openForUser(row.user_id, row.notes); } catch { notes = ''; }
+  let notes = row.notes.startsWith('enc1.') ? row.notes : '';
+  let notesFormat: 'client' | 'legacy' | 'empty' | 'unreadable' = row.notes.startsWith('enc1.') ? 'client' : row.notes ? 'legacy' : 'empty';
+  if (notesFormat === 'legacy') { try { notes = openForUser(row.user_id, row.notes); } catch { notesFormat = 'unreadable'; } }
   return {
     id: row.id, userId: row.user_id, title: row.title, type: row.type,
     startsAt: row.starts_at, endsAt: row.ends_at, hackathonId: row.hackathon_id,
-    notes, remindOffsets: parseJson<number[]>(row.remind_offsets, [10080, 1440, 120]),
+    notes, notesFormat, remindOffsets: parseJson<number[]>(row.remind_offsets, [10080, 1440, 120]),
     createdAt: row.created_at,
   };
 }
@@ -310,7 +311,7 @@ export function createCalendarEvent(userId: string, input: {
   const id = uid('cal');
   run(`INSERT INTO calendar_events (id,user_id,title,type,starts_at,ends_at,hackathon_id,notes,remind_offsets,created_at)
        VALUES (?,?,?,?,?,?,?,?,?,?)`, id, userId, input.title, input.type, input.startsAt, input.endsAt,
-    input.hackathonId ?? null, sealForUser(userId, input.notes), JSON.stringify(input.remindOffsets), Date.now());
+    input.hackathonId ?? null, input.notes, JSON.stringify(input.remindOffsets), Date.now());
   ensureReminders(id, userId, input.startsAt, input.remindOffsets);
   return toCalendarEvent(get<CalendarRow>('SELECT * FROM calendar_events WHERE id=?', id)!);
 }
@@ -324,7 +325,7 @@ export function updateCalendarEvent(userId: string, id: string, input: Partial<{
   const offsets = input.remindOffsets ?? parseJson<number[]>(row.remind_offsets, [10080, 1440, 120]);
   run(`UPDATE calendar_events SET title=?, starts_at=?, ends_at=?, notes=?, remind_offsets=?, type=? WHERE id=?`,
     input.title ?? row.title, startsAt, input.endsAt ?? row.ends_at,
-    input.notes !== undefined ? sealForUser(userId, input.notes) : row.notes,
+    input.notes !== undefined ? input.notes : row.notes,
     JSON.stringify(offsets), input.type ?? row.type, id);
   run('DELETE FROM reminders WHERE event_id=? AND sent_at IS NULL', id);
   ensureReminders(id, userId, startsAt, offsets);

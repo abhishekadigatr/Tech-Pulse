@@ -74,6 +74,7 @@ export interface Application {
   hackathon: Hackathon;
   status: ApplicationStatus;
   notes: string;
+  notesFormat?: 'client' | 'legacy' | 'empty' | 'unreadable';
   appliedAt: number;
   updatedAt: number;
 }
@@ -155,6 +156,7 @@ export interface CalendarEvent {
   endsAt: number;
   hackathonId: string | null;
   notes: string;
+  notesFormat?: 'client' | 'legacy' | 'empty' | 'unreadable';
   remindOffsets: number[];
   createdAt: number;
 }

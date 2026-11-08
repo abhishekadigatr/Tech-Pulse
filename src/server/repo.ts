@@ -1,5 +1,5 @@
 import { all, get, run, uid } from './db.ts';
-import { openForUser, sealForUser } from './crypto.ts';
+import { openForUser } from './crypto.ts';
 import type { UserRow } from './auth.ts';
 import type {
   Application, ApplicationStatus, Hackathon, Me, Mode, Paged, PublicUser, UserSettings,
@@ -152,13 +152,14 @@ export interface ApplicationRow {
 }
 
 export function toApplication(row: ApplicationRow, withHackathon = true): Application {
-  let notes = '';
-  try { notes = openForUser(row.user_id, row.notes); } catch { notes = ''; }
+  let notes = row.notes.startsWith('enc1.') ? row.notes : '';
+  let notesFormat: 'client' | 'legacy' | 'empty' | 'unreadable' = row.notes.startsWith('enc1.') ? 'client' : row.notes ? 'legacy' : 'empty';
+  if (notesFormat === 'legacy') { try { notes = openForUser(row.user_id, row.notes); } catch { notesFormat = 'unreadable'; } }
   const hr = get<HackathonRow>('SELECT * FROM hackathons WHERE id=?', row.hackathon_id);
   return {
     id: row.id, userId: row.user_id, hackathonId: row.hackathon_id,
     hackathon: hr && withHackathon ? toHackathon(hr, row.user_id) : ({} as Hackathon),
-    status: row.status, notes, appliedAt: row.applied_at, updatedAt: row.updated_at,
+    status: row.status, notes, notesFormat, appliedAt: row.applied_at, updatedAt: row.updated_at,
   };
 }
 
@@ -173,13 +174,15 @@ export function createApplication(userId: string, hackathonId: string, status: A
   const existing = get<ApplicationRow>('SELECT * FROM applications WHERE user_id=? AND hackathon_id=?', userId, hackathonId);
   const now = Date.now();
   if (existing) {
+    // Re-tracking without a note must not erase an existing encrypted note.
+    const updatedNotes = notes || existing.notes;
     run('UPDATE applications SET status=?, notes=?, updated_at=? WHERE id=?',
-      status, sealForUser(userId, notes), now, existing.id);
-    return toApplication({ ...existing, status, updated_at: now });
+      status, updatedNotes, now, existing.id);
+    return toApplication({ ...existing, status, notes: updatedNotes, updated_at: now });
   }
   const id = uid('app');
   run('INSERT INTO applications (id,user_id,hackathon_id,status,notes,applied_at,updated_at) VALUES (?,?,?,?,?,?,?)',
-    id, userId, hackathonId, status, sealForUser(userId, notes), now, now);
+    id, userId, hackathonId, status, notes, now, now);
   syncHackathonCalendar(userId, hackathonId);
   return toApplication(get<ApplicationRow>('SELECT * FROM applications WHERE id=?', id)!);
 }
@@ -195,10 +198,10 @@ export function syncHackathonCalendar(userId: string, hackathonId: string): numb
     if (get('SELECT 1 FROM calendar_events WHERE user_id=? AND hackathon_id=? AND type=?', userId, hackathonId, type)) return;
     run(`INSERT INTO calendar_events (id,user_id,title,type,starts_at,ends_at,hackathon_id,notes,remind_offsets,created_at)
          VALUES (?,?,?,?,?,?,?,?,?,?)`,
-      uid('cal'), userId, title, type, start, end, hackathonId, sealForUser(userId, notes), offsets, now);
+      uid('cal'), userId, title, type, start, end, hackathonId, notes, offsets, now);
     added += 1;
   };
-  insert(`Apply · ${h.name}`, 'apply', h.deadline - 2 * 3_600_000, h.deadline, 'Submit before the portal closes.');
-  insert(h.name, 'hackathon', h.start_at, h.end_at, 'Bring your laptop, ID and charger.');
+  insert(`Apply · ${h.name}`, 'apply', h.deadline - 2 * 3_600_000, h.deadline, '');
+  insert(h.name, 'hackathon', h.start_at, h.end_at, '');
   return added;
 }

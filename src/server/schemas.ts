@@ -55,14 +55,20 @@ export const deviceSchema = z.object({
   label: shortText(80).default('This browser'),
 });
 
+// The server must never accept a plaintext note on new writes.
+export const encryptedNote = z.string().max(12000).refine((v) => v === '' || /^enc1\.[A-Za-z0-9_-]{16}\.[A-Za-z0-9_-]{22,}$/.test(v), 'Encrypted note required');
+export const notesKeySchema = z.object({
+  salt: z.string().regex(/^[A-Za-z0-9_-]{22}$/), iv: z.string().regex(/^[A-Za-z0-9_-]{16}$/),
+  ciphertext: z.string().regex(/^[A-Za-z0-9_-]{50,200}$/), version: z.literal(1),
+});
 export const applicationSchema = z.object({
   hackathonId: z.string().min(1).max(80),
   status: status.default('applied'),
-  notes: shortText(2000).default(''),
+  notes: encryptedNote.default(''),
 });
 export const applicationPatchSchema = z.object({
   status: status.optional(),
-  notes: shortText(2000).optional(),
+  notes: encryptedNote.optional(),
 });
 
 export const teamSchema = z.object({
@@ -92,7 +98,7 @@ export const calendarSchema = z.object({
   type: calendarType.default('study'),
   startsAt: z.number().int().min(0).max(9_999_999_999_999),
   endsAt: z.number().int().min(0).max(9_999_999_999_999),
-  notes: shortText(2000).default(''),
+  notes: encryptedNote.default(''),
   remindOffsets: z.array(z.number().int().min(5).max(60 * 24 * 30)).max(6).default([1440, 120]),
   hackathonId: z.string().max(80).nullable().optional(),
 });

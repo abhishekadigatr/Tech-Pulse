@@ -6,7 +6,9 @@ import {
 import { useMemo, useState } from 'react';
 import { api, useApi } from '@/lib/api-client';
 import { AuthGate } from '@/components/AppShell';
-import { useToast } from '@/components/providers';
+import { useAuth, useToast } from '@/components/providers';
+import { NotesUnlock, useNotesKey, useReadableNotes } from '@/components/NotesUnlock';
+import { encryptNote } from '@/lib/crypto';
 import { Badge, Button, Card, EmptyState, Field, Input, Loading, Modal, SectionHeader, Select, Stat, Textarea, cn } from '@/components/ui';
 import { fmtShort, fmtTime, relative, toLocalInput, fromLocalInput, typeLabel } from '@/lib/format';
 import type { CalendarEvent, CalendarType } from '@/lib/types';
@@ -20,15 +22,20 @@ export default function CalendarPage() {
 
 function CalendarContent() {
   const { toast } = useToast();
+  const { me } = useAuth();
+  const noteKey = useNotesKey(me?.id);
   const [cursor, setCursor] = useState(() => { const d = new Date(); return new Date(d.getFullYear(), d.getMonth(), 1); });
   const [selected, setSelected] = useState<CalendarEvent | null>(null);
   const [createOpen, setCreateOpen] = useState(false);
+  const [editingNotes, setEditingNotes] = useState(false);
+  const [notesDraft, setNotesDraft] = useState('');
   const [busy, setBusy] = useState(false);
   const [form, setForm] = useState({ title: '', type: 'study' as CalendarType, startsAt: toLocalInput(Date.now() + 3_600_000), endsAt: toLocalInput(Date.now() + 2 * 3_600_000), notes: '', reminder: '1440' });
 
   const from = new Date(cursor.getFullYear(), cursor.getMonth(), 1).getTime();
   const to = new Date(cursor.getFullYear(), cursor.getMonth() + 1, 1).getTime();
   const calendar = useApi<{ items: CalendarEvent[] }>(`/calendar?from=${from}&to=${to}`);
+  const readable = useReadableNotes(calendar.data?.items, noteKey.key);
   const events = calendar.data?.items ?? [];
 
   const cells = useMemo(() => {
@@ -45,9 +52,10 @@ function CalendarContent() {
     if (form.title.trim().length < 2) { toast('Give your event a title', 'error'); return; }
     setBusy(true);
     try {
+      if (form.notes && !noteKey.key) throw new Error('Unlock notes before saving');
       await api('/calendar', { method: 'POST', body: {
         title: form.title, type: form.type, startsAt: fromLocalInput(form.startsAt), endsAt: fromLocalInput(form.endsAt),
-        notes: form.notes, remindOffsets: [Number(form.reminder), 120],
+        notes: form.notes ? await encryptNote(noteKey.key!, form.notes) : '', remindOffsets: [Number(form.reminder), 120],
       } });
       toast('Event added with reminders'); setCreateOpen(false); calendar.reload();
     } catch (err) { toast(err instanceof Error ? err.message : 'Could not add event', 'error'); }
@@ -55,7 +63,7 @@ function CalendarContent() {
   };
 
   const remove = async (id: string) => {
-    try { await api(`/calendar/${id}`, { method: 'DELETE' }); toast('Event removed'); setSelected(null); calendar.reload(); }
+    try { await api(`/calendar/${id}`, { method: 'DELETE' }); toast('Event removed'); setSelected(null); setEditingNotes(false); calendar.reload(); }
     catch { toast('Could not remove event', 'error'); }
   };
 
@@ -75,6 +83,7 @@ function CalendarContent() {
         </div>
       </div>
 
+      <NotesUnlock state={noteKey} />
       <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
         <Stat label="This month" value={events.length} hint="scheduled blocks" icon={<CalendarDays size={16} />} tone="cyan" />
         <Stat label="Deadlines" value={events.filter((e) => e.type === 'apply').length} hint="apply-before" icon={<Clock size={16} />} tone="amber" />
@@ -147,15 +156,32 @@ function CalendarContent() {
         </div>
       </div>
 
-      <Modal open={Boolean(selected)} onClose={() => setSelected(null)} title={selected?.title ?? 'Event'} description={selected ? `${fmtShort(selected.startsAt)} · ${fmtTime(selected.startsAt)} · ${typeLabel[selected.type]}` : undefined}>
+      <Modal open={Boolean(selected)} onClose={() => { setSelected(null); setEditingNotes(false); }} title={selected?.title ?? 'Event'} description={selected ? `${fmtShort(selected.startsAt)} · ${fmtTime(selected.startsAt)} · ${typeLabel[selected.type]}` : undefined}>
         {selected && <div className="space-y-4">
-          <div className="glass-soft p-4 text-xs leading-relaxed text-slate-300">{selected.notes || 'No private notes for this event.'}</div>
+          <div className="glass-soft p-4 text-xs leading-relaxed text-slate-300">{readable[selected.id]?.locked ? 'Unlock notes to read.' : readable[selected.id]?.failed ? 'Unable to decrypt this note.' : readable[selected.id]?.text ? `${readable[selected.id].text}${readable[selected.id].legacy ? ' (legacy server-encrypted)' : ''}` : 'No private notes for this event.'}</div>
+          {editingNotes ? <div className="space-y-3">
+            <Field label="Private notes"><Textarea value={notesDraft} onChange={(e) => setNotesDraft(e.target.value)} maxLength={2000} /></Field>
+            <div className="flex gap-2"><Button size="sm" variant="ghost" onClick={() => setEditingNotes(false)}>Cancel</Button>
+              <Button size="sm" variant="primary" loading={busy} onClick={async () => {
+                setBusy(true);
+                try {
+                  if (notesDraft && !noteKey.key) throw new Error('Unlock notes before saving');
+                  await api(`/calendar/${selected.id}`, { method: 'PATCH', body: { notes: notesDraft ? await encryptNote(noteKey.key!, notesDraft) : '' } });
+                  toast('Notes saved'); setEditingNotes(false); setSelected(null); setEditingNotes(false); calendar.reload();
+                } catch (err) { toast(err instanceof Error ? err.message : 'Could not save notes', 'error'); }
+                finally { setBusy(false); }
+              }}>Save notes</Button></div>
+          </div> : <Button size="sm" onClick={() => {
+            const note = readable[selected.id];
+            if (!note || note.locked || note.failed) { toast('Unlock notes before editing', 'error'); return; }
+            setNotesDraft(note.text); setEditingNotes(true);
+          }}>Edit notes</Button>}
           <div className="flex flex-wrap gap-2">{selected.remindOffsets.map((o) => <Badge key={o} tone="cyan">{o >= 1440 ? `${Math.round(o / 1440)}d` : `${o}m`} before</Badge>)}</div>
           <div className="flex justify-between"><Button variant="danger" onClick={() => void remove(selected.id)}><Trash2 size={14} /> Delete event</Button><Button variant="ghost" onClick={() => setSelected(null)}>Close</Button></div>
         </div>}
       </Modal>
 
-      <Modal open={createOpen} onClose={() => setCreateOpen(false)} title="Add a calendar block" description="Notes are encrypted twice before storage. Reminders are scheduled automatically.">
+      <Modal open={createOpen} onClose={() => setCreateOpen(false)} title="Add a calendar block" description="New notes are encrypted in your browser. Reminders are scheduled automatically.">
         <div className="space-y-4">
           <Field label="Title"><Input value={form.title} onChange={(e) => setForm({ ...form, title: e.target.value })} placeholder="Study · System design revision" maxLength={140} /></Field>
           <div className="grid gap-4 sm:grid-cols-2">

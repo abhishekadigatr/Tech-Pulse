@@ -1,11 +1,11 @@
 import { z } from 'zod';
 import { audit, revokeAuth, userById } from '../auth.ts';
-import { all, get, run } from '../db.ts';
+import { all, db, get, run } from '../db.ts';
 import { openForUser, sealForUser, verifyPassword } from '../crypto.ts';
 import { json, notFound, withCookies } from '../http.ts';
 import { applicationsFor, settingsFor, toMe } from '../repo.ts';
 import { ok, readBody, requireAuth, Routes, write, type Ctx } from '../router.ts';
-import { deviceSchema, profileSchema, settingsSchema, vaultSchema } from '../schemas.ts';
+import { deviceSchema, notesKeySchema, profileSchema, settingsSchema, vaultSchema } from '../schemas.ts';
 import { calendarEvents, notificationsFor } from '../features.ts';
 
 export async function handleUsers(ctx: Ctx): Promise<Response | null> {
@@ -52,6 +52,20 @@ export async function handleUsers(ctx: Ctx): Promise<Response | null> {
     }
     audit(auth.user.id, 'user.settings_updated', c.request);
     return ok({ settings: settingsFor(auth.user.id) });
+  });
+
+  r.get('/users/me/notes-key', ({ ctx: c }) => {
+    const auth = requireAuth(c);
+    const wrapped = get<{ salt: string; iv: string; ciphertext: string; version: number }>('SELECT salt,iv,ciphertext,version FROM notes_keys WHERE user_id=?', auth.user.id);
+    return ok({ wrapped: wrapped ?? null });
+  });
+  r.post('/users/me/notes-key', async ({ ctx: c }) => {
+    const auth = write(c);
+    const input = await readBody(c, notesKeySchema);
+    const result = db().prepare('INSERT OR IGNORE INTO notes_keys (user_id,salt,iv,ciphertext,version,created_at) VALUES (?,?,?,?,?,?)')
+      .run(auth.user.id, input.salt, input.iv, input.ciphertext, input.version, Date.now());
+    if (!result.changes) return json({ error: 'A notes key already exists. Unlock it instead.', code: 'NOTES_KEY_EXISTS' }, 409);
+    return ok({ ok: true }, 201);
   });
 
   /* ── Two-step encrypted private vault ─────────────────────────────────────
@@ -115,6 +129,7 @@ export async function handleUsers(ctx: Ctx): Promise<Response | null> {
       calendar: calendarEvents(u.id).map((e) => ({ title: e.title, type: e.type, startsAt: new Date(e.startsAt).toISOString(), notes: e.notes })),
       notifications: notificationsFor(u.id, 100).map((n) => ({ title: n.title, body: n.body, createdAt: new Date(n.createdAt).toISOString() })),
       publicDeviceKeys: all<{ public_jwk: string }>('SELECT public_jwk FROM devices WHERE user_id=?', u.id).map((d) => JSON.parse(d.public_jwk)),
+      encryptedNotesKey: get('SELECT salt,iv,ciphertext,version FROM notes_keys WHERE user_id=?', u.id) ?? null,
       encryptedVault: vault ? { ...vault, note: 'Double-encrypted; decrypt with your vault passphrase + server key.' } : null,
     };
     return json(payload, 200, { 'content-disposition': 'attachment; filename="tech-pulse-export.json"' });
@@ -125,7 +140,7 @@ export async function handleUsers(ctx: Ctx): Promise<Response | null> {
     const { password } = await readBody(c, z.object({ password: z.string().max(200) }));
     if (!await verifyPassword(password, auth.user.password_hash)) return json({ error: 'Incorrect password', code: 'INVALID_PASSWORD' }, 400);
     const id = auth.user.id;
-    const byUser = ['user_settings', 'vaults', 'devices', 'sessions', 'refresh_tokens', 'ws_tickets',
+    const byUser = ['user_settings', 'notes_keys', 'vaults', 'devices', 'sessions', 'refresh_tokens', 'ws_tickets',
       'bookmarks', 'applications', 'team_members', 'seekers', 'conversation_members',
       'calendar_events', 'reminders', 'notifications', 'push_subscriptions', 'trips'];
     run('DELETE FROM trip_saved_places WHERE trip_id IN (SELECT id FROM trips WHERE user_id=?)', id);
