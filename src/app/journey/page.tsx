@@ -6,6 +6,7 @@ import {
   Route, ShieldCheck, Star, Utensils, Wallet,
 } from 'lucide-react';
 import { Suspense, useMemo, useState } from 'react';
+import { directionsUrl, placeSearchUrl } from '@/lib/map-links';
 import { api, useApi } from '@/lib/api-client';
 import { AuthGate } from '@/components/AppShell';
 import { useToast } from '@/components/providers';
@@ -118,7 +119,7 @@ function JourneyContent() {
                 <Card className="overflow-hidden">
                   <div className="flex items-center justify-between border-b border-white/[.06] px-5 py-3">
                     <div className="flex items-center gap-2 text-xs font-bold text-white"><MapPin size={14} className="text-cyan" /> {selected.origin} → {selected.hackathon.venue}</div>
-                    <Badge tone="cyan">{selected.mode}</Badge>
+                    <div className="flex items-center gap-2"><Badge tone="cyan">{selected.mode}</Badge>{selected.mode !== 'flight' && <a className="text-xs text-cyan underline" href={directionsUrl({ origin: selected.origin, destination: selected.hackathon.address || selected.hackathon.venue || selected.hackathon.city, travelmode: selected.mode === 'car' ? 'driving' : 'transit' })} target="_blank" rel="noopener noreferrer">Open route in Google Maps</a>}</div>
                   </div>
                   <div className="map-grid relative h-[330px] bg-[#080e1b]">
                     <svg viewBox="0 0 600 300" className="h-full w-full">
@@ -163,7 +164,7 @@ function JourneyContent() {
                         <div key={p.id} className={cn('rounded-xl border p-3 transition', p.saved ? 'border-lime/35 bg-lime/[.05]' : 'border-white/[.06] bg-white/[.02]')}>
                           <div className="flex items-start gap-3">
                             <span className={cn('flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-white/[.05]', PLACE_TONE[p.type])}><Icon size={16} /></span>
-                            <div className="min-w-0 flex-1"><div className="flex items-center gap-2"><span className="truncate text-xs font-bold text-slate-200">{i + 1}. {p.name}</span><span className="flex items-center gap-0.5 text-[10px] text-amber"><Star size={10} fill="currentColor" />{p.rating}</span></div>
+                            <div className="min-w-0 flex-1"><div className="flex items-center gap-2"><a href={placeSearchUrl(`${p.name} ${p.address}`)} target="_blank" rel="noopener noreferrer" className="truncate text-xs font-bold text-slate-200 hover:text-cyan">{i + 1}. {p.name}</a><span className="flex items-center gap-0.5 text-[10px] text-amber"><Star size={10} fill="currentColor" />{p.rating}</span></div>
                               <div className="mt-0.5 text-[10px] text-slate-500">{p.address} · {p.price} · +{p.detourMin} min</div>
                               <p className="mt-1.5 text-[11px] leading-relaxed text-slate-400">{p.note}</p></div>
                             <button onClick={() => void toggleSave(p)} className={cn('shrink-0 rounded-lg border px-2 py-1 text-[10px] font-semibold transition', p.saved ? 'border-lime/40 bg-lime/10 text-lime' : 'border-white/10 text-slate-400 hover:border-cyan/40 hover:text-cyan')}>

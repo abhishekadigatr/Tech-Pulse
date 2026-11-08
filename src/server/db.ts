@@ -291,6 +291,10 @@ export function db(): DatabaseSync {
   connection.exec('PRAGMA foreign_keys = ON;');
   connection.exec('PRAGMA busy_timeout = 5000;');
   connection.exec(SCHEMA);
+  // Additive, idempotent migration for existing installations.
+  const columns = new Set((connection.prepare('PRAGMA table_info(hackathons)').all() as Array<{ name: string }>).map((c) => c.name));
+  if (!columns.has('venue_name')) connection.exec("ALTER TABLE hackathons ADD COLUMN venue_name TEXT NOT NULL DEFAULT ''");
+  if (!columns.has('address')) connection.exec("ALTER TABLE hackathons ADD COLUMN address TEXT NOT NULL DEFAULT ''");
   seedStatic();
   return connection;
 }

@@ -15,6 +15,8 @@ export default function HackathonsPage() {
   const [city, setCity] = useState('');
   const [tag, setTag] = useState('');
   const [status, setStatus] = useState('open');
+  const [deadlineFrom, setDeadlineFrom] = useState('');
+  const [deadlineTo, setDeadlineTo] = useState('');
   const [sort, setSort] = useState('deadline');
   const [page, setPage] = useState(1);
   const [showFilters, setShowFilters] = useState(false);
@@ -27,15 +29,17 @@ export default function HackathonsPage() {
     if (city) p.set('city', city);
     if (tag) p.set('tag', tag);
     if (status) p.set('status', status);
+    if (deadlineFrom) p.set('deadlineFrom', deadlineFrom);
+    if (deadlineTo) p.set('deadlineTo', deadlineTo);
     p.set('sort', sort);
     p.set('page', String(page));
     p.set('pageSize', '12');
     return p.toString();
-  }, [q, mode, city, tag, status, sort, page]);
+  }, [q, mode, city, tag, status, sort, page, deadlineFrom, deadlineTo]);
   const result = useApi<Paged<Hackathon>>(`/hackathons?${query}`);
 
-  const reset = () => { setQ(''); setMode(''); setCity(''); setTag(''); setStatus('open'); setSort('deadline'); setPage(1); };
-  const active = [mode, city, tag, status !== 'open' ? status : ''].filter(Boolean).length;
+  const reset = () => { setQ(''); setMode(''); setCity(''); setTag(''); setStatus('open'); setSort('deadline'); setDeadlineFrom(''); setDeadlineTo(''); setPage(1); };
+  const active = [mode, city, tag, deadlineFrom, deadlineTo, status !== 'open' ? status : ''].filter(Boolean).length;
   const total = result.data?.total ?? 0;
   const pages = Math.max(1, Math.ceil(total / 12));
 
@@ -87,6 +91,10 @@ export default function HackathonsPage() {
                 <option value="deadline">Deadline (soonest)</option><option value="latest">Event date</option><option value="prize">Prize pool</option>
               </select>
             </div>
+          </div>
+          <div className="mt-4 grid gap-3 sm:grid-cols-2">
+            <label><span className="label">Deadline from (UTC)</span><input className="input" type="date" value={deadlineFrom} max={deadlineTo || undefined} onChange={(e) => { setDeadlineFrom(e.target.value); setPage(1); }} /></label>
+            <label><span className="label">Deadline through (UTC)</span><input className="input" type="date" value={deadlineTo} min={deadlineFrom || undefined} onChange={(e) => { setDeadlineTo(e.target.value); setPage(1); }} /></label>
           </div>
           <div className="mt-4">
             <span className="label">Popular tags</span>

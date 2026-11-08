@@ -7,7 +7,7 @@ import type {
 
 export interface HackathonRow {
   id: string; slug: string; name: string; organizer: string; description: string;
-  domain: string; tags: string; mode: Mode; city: string; venue: string;
+  domain: string; tags: string; mode: Mode; city: string; venue: string; venue_name?: string; address?: string;
   lat: number; lng: number; deadline: number; start_at: number; end_at: number;
   official_url: string; apply_url: string; prize: string; hue: number;
   source: string; approval_status: 'approved' | 'pending' | 'rejected'; created_at: number;
@@ -86,7 +86,7 @@ export function toHackathon(row: HackathonRow, userId?: string): Hackathon {
   return {
     id: row.id, slug: row.slug, name: row.name, organizer: row.organizer,
     description: row.description, domain: row.domain, tags: parseJson<string[]>(row.tags, []),
-    mode: row.mode, city: row.city, venue: row.venue, lat: row.lat, lng: row.lng,
+    mode: row.mode, city: row.city, venue: row.venue, venueName: row.venue_name || row.venue, address: row.address || '', lat: row.lat, lng: row.lng,
     deadline: row.deadline, startAt: row.start_at, endAt: row.end_at,
     officialUrl: row.official_url, applyUrl: row.apply_url, prize: row.prize,
     hue: row.hue, source: row.source, approvalStatus: row.approval_status,
@@ -97,7 +97,7 @@ export function toHackathon(row: HackathonRow, userId?: string): Hackathon {
 
 export interface HackathonFilters {
   q?: string; mode?: string; city?: string; tag?: string; status?: string;
-  sort?: string; page?: number; pageSize?: number;
+  sort?: string; page?: number; pageSize?: number; deadlineFrom?: number; deadlineTo?: number;
 }
 
 export function listHackathons(filters: HackathonFilters, userId?: string): Paged<Hackathon> {
@@ -114,6 +114,8 @@ export function listHackathons(filters: HackathonFilters, userId?: string): Page
   }
   if (filters.city) { where.push('LOWER(city)=LOWER(?)'); params.push(filters.city.slice(0, 60)); }
   if (filters.tag) { where.push('LOWER(tags) LIKE ?'); params.push(`%${filters.tag.toLowerCase().slice(0, 40)}%`); }
+  if (filters.deadlineFrom !== undefined) { where.push('deadline >= ?'); params.push(filters.deadlineFrom); }
+  if (filters.deadlineTo !== undefined) { where.push('deadline < ?'); params.push(filters.deadlineTo); }
   if (filters.status === 'open') { where.push('deadline > ?'); params.push(now); }
   if (filters.status === 'closed') { where.push('deadline <= ?'); params.push(now); }
   if (filters.status === 'saved' && userId) { where.push('id IN (SELECT hackathon_id FROM bookmarks WHERE user_id=?)'); params.push(userId); }

@@ -18,6 +18,8 @@ export interface Hackathon {
   mode: Mode;
   city: string;
   venue: string;
+  venueName?: string;
+  address?: string;
   lat: number;
   lng: number;
   deadline: number;
