@@ -35,13 +35,17 @@ function ChatRoom() {
   const params = useParams<{ conversationId: string }>();
   const id = params.conversationId;
   const { me } = useAuth();
-  const { status, send, subscribe } = useSocket();
+  const { status, online, send, subscribe } = useSocket();
   const { toast } = useToast();
   const conv = useApi<{ conversation: Conversation }>(`/conversations/${encodeURIComponent(id)}`);
   const [key, setKey] = useState<ConversationKey | null>(null);
   const [messages, setMessages] = useState<PlainMessage[]>([]);
   const [setupError, setSetupError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
+  const [olderCursor, setOlderCursor] = useState<string | null>(null);
+  const [olderLoading, setOlderLoading] = useState(false);
+  const [readBy, setReadBy] = useState<Record<string, number>>({});
+  const suppressScroll = useRef(false);
   const [draft, setDraft] = useState('');
   const [typingFrom, setTypingFrom] = useState<string | null>(null);
   const [deviceLabel, setDeviceLabel] = useState('');
@@ -76,6 +80,7 @@ function ChatRoom() {
       setKey(cryptoKey);
       const history = await api<Paged<CipherMessage>>(`/conversations/${encodeURIComponent(id)}/messages?limit=100`);
       seen.current.clear();
+      setOlderCursor(history.nextCursor ?? null);
       setMessages(await decryptBatch(cryptoKey, history.items));
       await api(`/conversations/${encodeURIComponent(id)}/read`, { method: 'POST' }).catch(() => null);
     } catch (err) {
@@ -90,7 +95,8 @@ function ChatRoom() {
   }, [status, id, send]);
 
   useEffect(() => subscribe((frame) => {
-    if (frame.conversationId !== id && frame.type !== 'presence' && frame.type !== 'keys:updated') return;
+    if (frame.conversationId !== id && frame.type !== 'presence') return;
+    if (frame.type === 'read' && typeof frame.userId === 'string' && typeof frame.at === 'number') setReadBy((prev) => ({ ...prev, [frame.userId as string]: frame.at as number }));
     if (frame.type === 'message:new' && key) {
       const incoming = frame.message as CipherMessage;
       void decryptBatch(key, [incoming]).then((decoded) => {
@@ -105,7 +111,19 @@ function ChatRoom() {
     if (frame.type === 'keys:updated') void initialise();
   }), [subscribe, id, key, decryptBatch, initialise]);
 
-  useEffect(() => { bottomRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' }); }, [messages.length]);
+  useEffect(() => { if (suppressScroll.current) { suppressScroll.current = false; return; } bottomRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' }); }, [messages.length]);
+  useEffect(() => { setReadBy(conv.data?.conversation.readBy ?? {}); }, [conv.data]);
+  const loadOlder = async () => {
+    if (!olderCursor || !key || olderLoading) return;
+    setOlderLoading(true);
+    try {
+      const history = await api<Paged<CipherMessage>>(`/conversations/${encodeURIComponent(id)}/messages?limit=100&cursor=${encodeURIComponent(olderCursor)}`);
+      const decoded = await decryptBatch(key, history.items);
+      setOlderCursor(history.nextCursor ?? null);
+      if (decoded.length) { suppressScroll.current = true; setMessages((prev) => [...decoded, ...prev]); }
+    } catch { toast('Could not load older messages', 'error'); }
+    finally { setOlderLoading(false); }
+  };
 
   const submit = async () => {
     const text = draft.trim();
@@ -137,7 +155,7 @@ function ChatRoom() {
   };
 
   const conversation = conv.data?.conversation;
-  const onlineIds = conversation?.members.filter((m) => m.id !== me?.id) ?? [];
+  const onlineIds = conversation?.members.filter((m) => m.id !== me?.id && online.includes(m.id)) ?? [];
 
   return (
     <div className="space-y-4">
@@ -180,6 +198,7 @@ function ChatRoom() {
           </div>
 
           <div className="hide-scroll flex-1 space-y-3 overflow-y-auto px-4 py-5">
+            {!loading && !setupError && olderCursor && <div className="text-center"><Button size="sm" loading={olderLoading} onClick={() => void loadOlder()}>Load older messages</Button></div>}
             {(loading || conv.loading) ? <Loading rows={4} /> : setupError ? (
               <div className="flex h-full flex-col items-center justify-center gap-3 text-center"><KeyRound size={26} className="text-amber" /><div className="text-sm font-semibold text-slate-200">Encryption setup needs attention</div><p className="max-w-sm text-xs text-slate-500">{setupError}</p><Button size="sm" onClick={() => void initialise()}>Retry key exchange</Button></div>
             ) : messages.length === 0 ? (
@@ -193,6 +212,7 @@ function ChatRoom() {
                     m.mine ? 'rounded-tr-sm bg-gradient-to-br from-cyan/85 to-violet/85 text-[#04121a]' : 'rounded-tl-sm border border-white/[.07] bg-white/[.05] text-slate-200')}>
                     {m.text}
                   </div>
+                  {m.mine && !m.pending && <div className="mt-1 text-[10px] text-slate-500">{(() => { const n = Object.entries(readBy).filter(([uid, at]) => uid !== me?.id && at >= m.createdAt).length; return n ? `Read by ${n}` : 'Sent'; })()}</div>}
                 </div>
               </div>
             ))}

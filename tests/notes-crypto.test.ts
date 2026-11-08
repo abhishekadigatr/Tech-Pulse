@@ -33,6 +33,9 @@ test('legacy notes are readable and migrate to client ciphertext on edit', async
   const hack = get<{ id: string }>('SELECT id FROM hackathons LIMIT 1')!.id;
   const now = Date.now();
   run('INSERT INTO applications (id,user_id,hackathon_id,status,notes,applied_at,updated_at) VALUES (?,?,?,?,?,?,?)', 'legacy', user, hack, 'applied', sealForUser(user, 'legacy private text'), now, now);
+  const empty = sealForUser(user, '');
+  const { openForUser } = await import('../src/server/crypto.ts');
+  assert.equal(openForUser(user, empty), '');
   const row = get<Parameters<typeof toApplication>[0]>('SELECT * FROM applications WHERE id=?', 'legacy')!;
   const legacy = toApplication(row);
   assert.equal(legacy.notesFormat, 'legacy'); assert.equal(legacy.notes, 'legacy private text');

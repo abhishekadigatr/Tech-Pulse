@@ -126,6 +126,7 @@ export interface Conversation {
   lastMessageAt: number;
   unread: number;
   online?: number;
+  readBy?: Record<string, number>;
 }
 
 /** The server never sees `plaintext`. This is the only shape it stores. */
@@ -231,4 +232,5 @@ export interface Paged<T> {
   page: number;
   pageSize: number;
   total: number;
+  nextCursor?: string | null;
 }

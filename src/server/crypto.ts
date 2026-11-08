@@ -70,7 +70,7 @@ export function seal(plaintext: string, key: Buffer): string {
 
 export function open(blob: string, key: Buffer): string {
   const [version, iv, tag, ct] = blob.split('.');
-  if (version !== 'v1' || !iv || !tag || !ct) throw new Error('Invalid sealed payload');
+  if (version !== 'v1' || !iv || !tag || ct === undefined) throw new Error('Invalid sealed payload');
   const decipher = createDecipheriv('aes-256-gcm', key, Buffer.from(iv, 'base64url'));
   decipher.setAuthTag(Buffer.from(tag, 'base64url'));
   return Buffer.concat([decipher.update(Buffer.from(ct, 'base64url')), decipher.final()]).toString('utf8');

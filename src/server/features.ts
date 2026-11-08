@@ -186,6 +186,7 @@ export function listConversations(userId: string): Conversation[] {
       id: r.id, kind: r.kind, teamId: r.team_id, title, members,
       keyVersion: r.key_version, lastMessageAt: last?.created_at ?? r.created_at, unread,
       online: getHub()?.conversationOnline(r.id) ?? 0,
+      readBy: Object.fromEntries(all<{ user_id: string; last_read_at: number }>('SELECT user_id,last_read_at FROM conversation_members WHERE conversation_id=?', r.id).map((m) => [m.user_id, m.last_read_at])),
     };
   });
 }
@@ -257,27 +258,37 @@ export function rotateConversationKey(id: string, userId: string): boolean {
   return true;
 }
 
-export function messagesFor(id: string, userId: string, before?: number, limit = 50): Paged<CipherMessage> {
+export function messagesFor(id: string, userId: string, before?: string, limit = 50): Paged<CipherMessage> {
   if (!get('SELECT 1 FROM conversation_members WHERE conversation_id=? AND user_id=?', id, userId)) {
     return { items: [], page: 1, pageSize: limit, total: 0 };
   }
-  const cursor = before && Number.isFinite(before) ? before : Number.MAX_SAFE_INTEGER;
-  const rows = all<{ id: string; conversation_id: string; sender_id: string; ciphertext: string; nonce: string; key_version: number; created_at: number }>(
-    'SELECT * FROM messages WHERE conversation_id=? AND created_at<? ORDER BY created_at DESC LIMIT ?', id, cursor, Math.min(100, limit))
-    .reverse();
+  const match = before?.match(/^(\d{1,16})(?::([A-Za-z0-9_-]{1,100}))?$/);
+  const timestamp = match ? Number(match[1]) : Number.MAX_SAFE_INTEGER;
+  const cursorId = match?.[2] ?? '';
+  const pageSize = Math.min(100, Math.max(1, limit));
+  const fetched = all<{ id: string; conversation_id: string; sender_id: string; ciphertext: string; nonce: string; key_version: number; created_at: number }>(
+    `SELECT * FROM messages WHERE conversation_id=? AND (created_at<? OR (created_at=? AND id<?))
+     ORDER BY created_at DESC,id DESC LIMIT ?`, id, timestamp, timestamp, cursorId, pageSize + 1);
+  const hasMore = fetched.length > pageSize;
+  const rows = fetched.slice(0, pageSize).reverse();
   return {
     items: rows.map((r) => ({
       id: r.id, conversationId: r.conversation_id, senderId: r.sender_id,
       senderName: publicUserById(r.sender_id).name, ciphertext: r.ciphertext, nonce: r.nonce,
       keyVersion: r.key_version, createdAt: r.created_at,
     })),
-    page: 1, pageSize: limit,
+    page: 1, pageSize,
     total: get<{ n: number }>('SELECT COUNT(*) as n FROM messages WHERE conversation_id=?', id)?.n ?? 0,
+    nextCursor: hasMore && rows.length ? `${rows[0].created_at}:${rows[0].id}` : null,
   };
 }
 
-export function markConversationRead(id: string, userId: string): void {
-  run('UPDATE conversation_members SET last_read_at=? WHERE conversation_id=? AND user_id=?', Date.now(), id, userId);
+export function markConversationRead(id: string, userId: string): boolean {
+  const at = Date.now();
+  if (!dbRun('UPDATE conversation_members SET last_read_at=? WHERE conversation_id=? AND user_id=?', at, id, userId)) return false;
+  for (const member of all<{ user_id: string }>('SELECT user_id FROM conversation_members WHERE conversation_id=?', id))
+    getHub()?.broadcast(member.user_id, 'read', { conversationId: id, userId, at });
+  return true;
 }
 
 /* ─────────────────────────────── Calendar / reminders ───────────────────── */
