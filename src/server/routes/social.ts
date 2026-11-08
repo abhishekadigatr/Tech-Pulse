@@ -120,7 +120,7 @@ export async function handleSocial(ctx: Ctx): Promise<Response | null> {
   r.get('/conversations/:id/messages', ({ ctx: c, params }) => {
     const auth = requireAuth(c);
     const before = c.url.searchParams.get('cursor');
-    return ok(messagesFor(params.id, auth.user.id, before ? Number(before) : undefined, clampInt(c.url.searchParams.get('limit'), 1, 100, 50)));
+    return ok(messagesFor(params.id, auth.user.id, before ?? undefined, clampInt(c.url.searchParams.get('limit'), 1, 100, 50)));
   });
 
   r.post('/conversations/:id/messages', async ({ ctx: c, params }) => {
@@ -150,8 +150,7 @@ export async function handleSocial(ctx: Ctx): Promise<Response | null> {
 
   r.post('/conversations/:id/read', ({ ctx: c, params }) => {
     const auth = write(c);
-    markConversationRead(params.id, auth.user.id);
-    return ok({ ok: true });
+    return markConversationRead(params.id, auth.user.id) ? ok({ ok: true }) : notFound('Conversation not found');
   });
 
   return r.run();

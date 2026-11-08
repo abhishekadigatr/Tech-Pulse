@@ -1,4 +1,5 @@
 import { assertSameOrigin, clientIp, errorResponse, notFound, rateLimit } from '@/server/http';
+import { routeRatePolicy } from '@/server/ratelimit';
 import { ctxFrom, enforceApiAccess, type Ctx } from '@/server/router';
 import { handleAuth } from '@/server/routes/auth';
 import { handleUsers } from '@/server/routes/users';
@@ -23,6 +24,8 @@ async function dispatch(request: Request, context: RouteContext): Promise<Respon
   const segments = path.filter((s) => typeof s === 'string' && s.length <= 80 && !s.includes('..') && !s.includes('/'));
   const ctx = ctxFrom(request, segments);
   rateLimit(`api:${clientIp(request)}`, 900, 60_000);
+  const policy = routeRatePolicy(ctx.method, ctx.path);
+  if (policy) rateLimit(`route:${policy.name}:${ctx.auth ? `user:${ctx.auth.user.id}` : `ip:${clientIp(request)}`}`, policy.max, policy.windowMs);
   if (!['GET', 'HEAD', 'OPTIONS'].includes(ctx.method)) assertSameOrigin(request);
   enforceApiAccess(ctx);
   for (const handle of handlers) {

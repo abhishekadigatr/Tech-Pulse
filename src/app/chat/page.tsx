@@ -16,7 +16,7 @@ export default function ChatIndexPage() {
 
 function ChatList() {
   const { me } = useAuth();
-  const { status } = useSocket();
+  const { status, online } = useSocket();
   const { toast } = useToast();
   const conversations = useApi<{ items: Conversation[] }>('/conversations');
   const seekers = useApi<{ items: Seeker[] }>('/seekers');
@@ -53,7 +53,7 @@ function ChatList() {
             items.map((c) => (
               <Link key={c.id} href={`/chat/${c.id}`} className="flex items-center gap-3 rounded-xl p-4 transition hover:bg-white/[.04]">
                 <div className="relative"><div className="flex h-11 w-11 items-center justify-center rounded-xl bg-gradient-to-br from-cyan/20 to-violet/20 text-cyan">{c.kind === 'team' ? <Users size={19} /> : <MessageSquare size={19} />}</div>
-                  {(c.online ?? 0) > 0 && <span className="absolute -bottom-0.5 -right-0.5 h-3 w-3 rounded-full border-2 border-[#0c1322] bg-lime" />}</div>
+                  {c.members.some((m) => m.id !== me?.id && online.includes(m.id)) && <span className="absolute -bottom-0.5 -right-0.5 h-3 w-3 rounded-full border-2 border-[#0c1322] bg-lime" />}</div>
                 <div className="min-w-0 flex-1"><div className="flex items-center gap-2"><span className="truncate text-sm font-semibold text-slate-200">{c.title}</span>{c.kind === 'team' && <Badge tone="violet">Team</Badge>}</div>
                   <div className="mt-1 flex items-center gap-2 text-[11px] text-slate-500">{c.members.slice(0, 3).map((m) => <Avatar key={m.id} name={m.name} hue={m.avatarHue} size={18} />)}<span>{c.members.length} members · key v{c.keyVersion}</span></div></div>
                 <div className="shrink-0 text-right"><div className="text-[10px] text-slate-600">{relative(c.lastMessageAt)}</div>{c.unread > 0 && <span className="mt-1 inline-flex h-5 min-w-5 items-center justify-center rounded-full bg-cyan px-1.5 text-[10px] font-bold text-[#04121a]">{c.unread}</span>}</div>

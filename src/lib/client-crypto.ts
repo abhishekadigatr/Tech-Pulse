@@ -8,6 +8,8 @@
  * The server only ever stores ciphertext, nonces and public/wrapped keys.
  */
 import { api } from './api-client';
+import { b64, unb64, randomIv, derivePassphraseKey, encryptText, decryptText, hkdfKey } from './crypto';
+export { b64, unb64 } from './crypto';
 
 const enc = new TextEncoder();
 /** Copy into an ArrayBuffer-backed view (TS 5.9 BufferSource strictness). */
@@ -15,24 +17,6 @@ const ab = (u: Uint8Array): Uint8Array<ArrayBuffer> => { const copy = new Uint8A
 const toBytes = (s: string): Uint8Array<ArrayBuffer> => ab(enc.encode(s));
 const dec = new TextDecoder();
 const subtle = (): SubtleCrypto => globalThis.crypto.subtle;
-
-export function b64(bytes: ArrayBuffer | Uint8Array): string {
-  const arr = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes);
-  let out = '';
-  for (let i = 0; i < arr.length; i += 1) out += String.fromCharCode(arr[i]);
-  return btoa(out).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
-}
-
-export function unb64(value: string): Uint8Array<ArrayBuffer> {
-  const normalized = value.replace(/-/g, '+').replace(/_/g, '/');
-  const padded = normalized + '='.repeat((4 - (normalized.length % 4)) % 4);
-  const raw = atob(padded);
-  const out = new Uint8Array(raw.length);
-  for (let i = 0; i < raw.length; i += 1) out[i] = raw.charCodeAt(i);
-  return ab(out);
-}
-
-const randomIv = (): Uint8Array<ArrayBuffer> => ab(globalThis.crypto.getRandomValues(new Uint8Array(12)));
 
 /* ── IndexedDB: CryptoKey objects are structured-cloneable and non-extractable ── */
 const DB_NAME = 'tech-pulse-crypto-v1';
@@ -83,13 +67,7 @@ async function idbGet<T>(key: string): Promise<T | undefined> {
 /* ── Private vault (client-side layer of the 2-step encryption) ─────────── */
 export const newVaultSalt = (): string => b64(globalThis.crypto.getRandomValues(new Uint8Array(16)));
 
-export async function deriveVaultKey(passphrase: string, salt: string): Promise<CryptoKey> {
-  const material = await subtle().importKey('raw', enc.encode(passphrase), 'PBKDF2', false, ['deriveKey']);
-  return subtle().deriveKey(
-    { name: 'PBKDF2', salt: unb64(salt), iterations: 210_000, hash: 'SHA-256' },
-    material, { name: 'AES-GCM', length: 256 }, false, ['encrypt', 'decrypt'],
-  );
-}
+export const deriveVaultKey = derivePassphraseKey;
 
 let vaultKeyMemory: CryptoKey | null = null;
 export const setVaultKey = (key: CryptoKey | null): void => { vaultKeyMemory = key; };
@@ -145,11 +123,7 @@ const HKDF_SALT = toBytes('tech-pulse:e2ee:v1');
 async function kekFor(privateKey: CryptoKey, publicJwk: JsonWebKey): Promise<CryptoKey> {
   const publicKey = await subtle().importKey('jwk', publicJwk, { name: 'ECDH', namedCurve: 'P-256' }, false, []);
   const bits = await subtle().deriveBits({ name: 'ECDH', public: publicKey }, privateKey, 256);
-  const hkdf = await subtle().importKey('raw', bits, 'HKDF', false, ['deriveKey']);
-  return subtle().deriveKey(
-    { name: 'HKDF', hash: 'SHA-256', salt: HKDF_SALT, info: HKDF_INFO },
-    hkdf, { name: 'AES-GCM', length: 256 }, false, ['encrypt', 'decrypt'],
-  );
+  return hkdfKey(new Uint8Array(bits), HKDF_SALT, HKDF_INFO);
 }
 
 interface WrappedPayload { iv: string; ct: string; wrapper: JsonWebKey }
@@ -216,14 +190,12 @@ export async function establishConversationKey(conversationId: string): Promise<
 }
 
 export async function encryptMessage(key: CryptoKey, plaintext: string): Promise<{ ciphertext: string; nonce: string }> {
-  const iv = randomIv();
-  const ct = await subtle().encrypt({ name: 'AES-GCM', iv }, key, toBytes(plaintext));
-  return { ciphertext: b64(ct), nonce: b64(iv) };
+  const result = await encryptText(key, plaintext);
+  return { ciphertext: result.ciphertext, nonce: result.iv };
 }
 
 export async function decryptMessage(key: CryptoKey, ciphertext: string, nonce: string): Promise<string> {
-  const plain = await subtle().decrypt({ name: 'AES-GCM', iv: unb64(nonce) }, key, unb64(ciphertext));
-  return dec.decode(plain);
+  return decryptText(key, { ciphertext, iv: nonce });
 }
 
 export function exportPublicKeyLabel(jwk: JsonWebKey): string {

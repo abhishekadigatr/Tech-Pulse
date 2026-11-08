@@ -6,6 +6,7 @@ import nextEnv from '@next/env';
 import { db, seedAccounts } from './src/server/db.ts';
 import { attachWebSocketHub } from './src/server/ws-hub.ts';
 import { startScheduler } from './src/server/scheduler.ts';
+import { configureMail } from './src/server/mail.ts';
 import { buildCsp, frameAncestors } from './src/lib/csp.ts';
 
 nextEnv.loadEnvConfig(process.cwd(), process.env.NODE_ENV !== 'production');
@@ -27,6 +28,7 @@ const port = Number(flagValue('--port') || positionalPort || process.env.PORT ||
 if (dev && !process.env.APP_ORIGIN) process.env.APP_ORIGIN = `http://localhost:${port}`;
 
 async function main(): Promise<void> {
+  configureMail();      // require an SMTP provider before listening in production
   db();                 // schema + curated catalogue
   await seedAccounts(); // demo accounts only outside production
 
@@ -35,6 +37,8 @@ async function main(): Promise<void> {
   await app.prepare();
 
   const server = createServer((req, res) => {
+    // Never trust client-provided internal IP or introspection headers.
+    req.headers['x-tp-client-ip'] = req.socket.remoteAddress ?? 'unknown';
     // Overwrite any client-supplied value; used only for local session introspection.
     req.headers['x-tp-internal-auth-origin'] = `http://127.0.0.1:${port}`;
     if (!dev) {

@@ -1,6 +1,6 @@
 import { all, db, get, run, uid } from './db.ts';
 import { conflict } from './http.ts';
-import { sealForUser, openForUser } from './crypto.ts';
+import { openForUser } from './crypto.ts';
 import { getHub } from './ws-hub.ts';
 import {
   hackathonRow, parseJson, publicUserById, settingsFor, toHackathon,
@@ -186,6 +186,7 @@ export function listConversations(userId: string): Conversation[] {
       id: r.id, kind: r.kind, teamId: r.team_id, title, members,
       keyVersion: r.key_version, lastMessageAt: last?.created_at ?? r.created_at, unread,
       online: getHub()?.conversationOnline(r.id) ?? 0,
+      readBy: Object.fromEntries(all<{ user_id: string; last_read_at: number }>('SELECT user_id,last_read_at FROM conversation_members WHERE conversation_id=?', r.id).map((m) => [m.user_id, m.last_read_at])),
     };
   });
 }
@@ -257,27 +258,37 @@ export function rotateConversationKey(id: string, userId: string): boolean {
   return true;
 }
 
-export function messagesFor(id: string, userId: string, before?: number, limit = 50): Paged<CipherMessage> {
+export function messagesFor(id: string, userId: string, before?: string, limit = 50): Paged<CipherMessage> {
   if (!get('SELECT 1 FROM conversation_members WHERE conversation_id=? AND user_id=?', id, userId)) {
     return { items: [], page: 1, pageSize: limit, total: 0 };
   }
-  const cursor = before && Number.isFinite(before) ? before : Number.MAX_SAFE_INTEGER;
-  const rows = all<{ id: string; conversation_id: string; sender_id: string; ciphertext: string; nonce: string; key_version: number; created_at: number }>(
-    'SELECT * FROM messages WHERE conversation_id=? AND created_at<? ORDER BY created_at DESC LIMIT ?', id, cursor, Math.min(100, limit))
-    .reverse();
+  const match = before?.match(/^(\d{1,16})(?::([A-Za-z0-9_-]{1,100}))?$/);
+  const timestamp = match ? Number(match[1]) : Number.MAX_SAFE_INTEGER;
+  const cursorId = match?.[2] ?? '';
+  const pageSize = Math.min(100, Math.max(1, limit));
+  const fetched = all<{ id: string; conversation_id: string; sender_id: string; ciphertext: string; nonce: string; key_version: number; created_at: number }>(
+    `SELECT * FROM messages WHERE conversation_id=? AND (created_at<? OR (created_at=? AND id<?))
+     ORDER BY created_at DESC,id DESC LIMIT ?`, id, timestamp, timestamp, cursorId, pageSize + 1);
+  const hasMore = fetched.length > pageSize;
+  const rows = fetched.slice(0, pageSize).reverse();
   return {
     items: rows.map((r) => ({
       id: r.id, conversationId: r.conversation_id, senderId: r.sender_id,
       senderName: publicUserById(r.sender_id).name, ciphertext: r.ciphertext, nonce: r.nonce,
       keyVersion: r.key_version, createdAt: r.created_at,
     })),
-    page: 1, pageSize: limit,
+    page: 1, pageSize,
     total: get<{ n: number }>('SELECT COUNT(*) as n FROM messages WHERE conversation_id=?', id)?.n ?? 0,
+    nextCursor: hasMore && rows.length ? `${rows[0].created_at}:${rows[0].id}` : null,
   };
 }
 
-export function markConversationRead(id: string, userId: string): void {
-  run('UPDATE conversation_members SET last_read_at=? WHERE conversation_id=? AND user_id=?', Date.now(), id, userId);
+export function markConversationRead(id: string, userId: string): boolean {
+  const at = Date.now();
+  if (!dbRun('UPDATE conversation_members SET last_read_at=? WHERE conversation_id=? AND user_id=?', at, id, userId)) return false;
+  for (const member of all<{ user_id: string }>('SELECT user_id FROM conversation_members WHERE conversation_id=?', id))
+    getHub()?.broadcast(member.user_id, 'read', { conversationId: id, userId, at });
+  return true;
 }
 
 /* ─────────────────────────────── Calendar / reminders ───────────────────── */
@@ -287,12 +298,13 @@ interface CalendarRow {
 }
 
 export function toCalendarEvent(row: CalendarRow): CalendarEvent {
-  let notes = '';
-  try { notes = openForUser(row.user_id, row.notes); } catch { notes = ''; }
+  let notes = row.notes.startsWith('enc1.') ? row.notes : '';
+  let notesFormat: 'client' | 'legacy' | 'empty' | 'unreadable' = row.notes.startsWith('enc1.') ? 'client' : row.notes ? 'legacy' : 'empty';
+  if (notesFormat === 'legacy') { try { notes = openForUser(row.user_id, row.notes); } catch { notesFormat = 'unreadable'; } }
   return {
     id: row.id, userId: row.user_id, title: row.title, type: row.type,
     startsAt: row.starts_at, endsAt: row.ends_at, hackathonId: row.hackathon_id,
-    notes, remindOffsets: parseJson<number[]>(row.remind_offsets, [10080, 1440, 120]),
+    notes, notesFormat, remindOffsets: parseJson<number[]>(row.remind_offsets, [10080, 1440, 120]),
     createdAt: row.created_at,
   };
 }
@@ -310,7 +322,7 @@ export function createCalendarEvent(userId: string, input: {
   const id = uid('cal');
   run(`INSERT INTO calendar_events (id,user_id,title,type,starts_at,ends_at,hackathon_id,notes,remind_offsets,created_at)
        VALUES (?,?,?,?,?,?,?,?,?,?)`, id, userId, input.title, input.type, input.startsAt, input.endsAt,
-    input.hackathonId ?? null, sealForUser(userId, input.notes), JSON.stringify(input.remindOffsets), Date.now());
+    input.hackathonId ?? null, input.notes, JSON.stringify(input.remindOffsets), Date.now());
   ensureReminders(id, userId, input.startsAt, input.remindOffsets);
   return toCalendarEvent(get<CalendarRow>('SELECT * FROM calendar_events WHERE id=?', id)!);
 }
@@ -324,7 +336,7 @@ export function updateCalendarEvent(userId: string, id: string, input: Partial<{
   const offsets = input.remindOffsets ?? parseJson<number[]>(row.remind_offsets, [10080, 1440, 120]);
   run(`UPDATE calendar_events SET title=?, starts_at=?, ends_at=?, notes=?, remind_offsets=?, type=? WHERE id=?`,
     input.title ?? row.title, startsAt, input.endsAt ?? row.ends_at,
-    input.notes !== undefined ? sealForUser(userId, input.notes) : row.notes,
+    input.notes !== undefined ? input.notes : row.notes,
     JSON.stringify(offsets), input.type ?? row.type, id);
   run('DELETE FROM reminders WHERE event_id=? AND sent_at IS NULL', id);
   ensureReminders(id, userId, startsAt, offsets);

@@ -1,7 +1,8 @@
 import { audit } from '../auth.ts';
 import { all, run, uid } from '../db.ts';
-import { clampInt, clientIp, notFound, safeExternalUrl } from '../http.ts';
-import { limit, ok, requireAuth, Routes, write, type Ctx } from '../router.ts';
+import { badRequest, clampInt, clientIp, notFound, safeExternalUrl } from '../http.ts';
+import { ok, requireAuth, Routes, write, type Ctx } from '../router.ts';
+import { deadlineRangeSchema } from '../schemas.ts';
 import { facets, hackathonRow, listHackathons, parseJson, toHackathon } from '../repo.ts';
 
 export async function handleCatalog(ctx: Ctx): Promise<Response | null> {
@@ -9,6 +10,8 @@ export async function handleCatalog(ctx: Ctx): Promise<Response | null> {
 
   r.get('/hackathons', ({ ctx: c }) => {
     const q = c.url.searchParams;
+    const range = deadlineRangeSchema.safeParse({ from: q.get('deadlineFrom') ?? undefined, to: q.get('deadlineTo') ?? undefined });
+    if (!range.success) badRequest('Invalid deadline date range');
     const result = listHackathons({
       q: q.get('q') ?? undefined,
       mode: q.get('mode') ?? undefined,
@@ -16,6 +19,8 @@ export async function handleCatalog(ctx: Ctx): Promise<Response | null> {
       tag: q.get('tag') ?? undefined,
       status: q.get('status') ?? undefined,
       sort: q.get('sort') ?? undefined,
+      deadlineFrom: range.data.from ? Date.parse(`${range.data.from}T00:00:00.000Z`) : undefined,
+      deadlineTo: range.data.to ? Date.parse(`${range.data.to}T00:00:00.000Z`) + 86_400_000 : undefined,
       page: clampInt(q.get('page'), 1, 1000, 1),
       pageSize: clampInt(q.get('pageSize'), 1, 48, 12),
     }, c.auth?.user.id);
@@ -65,7 +70,6 @@ export async function handleCatalog(ctx: Ctx): Promise<Response | null> {
     if (!row) return notFound('Hackathon not found');
     const target = safeExternalUrl(row.apply_url) ?? safeExternalUrl(row.official_url);
     if (!target) return notFound('This listing has no valid external link');
-    limit(`apply:${clientIp(c.request)}`, 60, 60_000);
     run('INSERT INTO apply_clicks (id,user_id,hackathon_id,ip_hash,created_at) VALUES (?,?,?,?,?)',
       uid('clk'), auth.user.id, row.id, clientIp(c.request), Date.now());
     audit(auth.user.id, 'hackathon.apply_click', c.request, row.id);

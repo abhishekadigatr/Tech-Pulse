@@ -111,7 +111,7 @@ function SocketProvider({ children }: { children: ReactNode }) {
         ws.onmessage = (event) => {
           try {
             const frame = JSON.parse(event.data as string) as SocketFrame;
-            if (frame.type === 'presence' && Array.isArray(frame.online)) setOnline(frame.online as string[]);
+            if ((frame.type === 'presence' || frame.type === 'connected') && Array.isArray(frame.online)) setOnline(frame.online as string[]);
             for (const listener of listeners.current) listener(frame);
           } catch { /* ignore malformed frames */ }
         };
@@ -130,6 +130,7 @@ function SocketProvider({ children }: { children: ReactNode }) {
       if (retryRef.current) clearTimeout(retryRef.current);
       wsRef.current?.close();
       wsRef.current = null;
+      setOnline([]);
     };
   }, [me?.id]);
   const value = useMemo<SocketState>(() => ({

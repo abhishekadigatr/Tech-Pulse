@@ -1,4 +1,6 @@
 import type { z } from 'zod';
+import { RateLimitError } from './ratelimit.ts';
+export { rateLimit } from './ratelimit.ts';
 import { constantTimeEqual, sha256 } from './crypto.ts';
 
 export class ApiException extends Error {
@@ -39,6 +41,7 @@ export function json<T>(data: T, status = 200, extraHeaders?: Record<string, str
 }
 
 export function errorResponse(error: unknown): Response {
+  if (error instanceof RateLimitError) return json({ error: error.message, code: 'RATE_LIMITED' }, 429, { 'retry-after': String(error.retryAfter) });
   if (error instanceof ApiException) {
     return json({ error: error.message, code: error.code, details: error.details }, error.status,
       error.status === 429 ? { 'retry-after': '60' } : undefined);
@@ -81,8 +84,8 @@ export async function body<S extends z.ZodTypeAny>(request: Request, schema: S):
 }
 
 export function clientIp(request: Request): string {
-  const forwarded = request.headers.get('x-forwarded-for')?.split(',')[0]?.trim();
-  const raw = forwarded || request.headers.get('x-real-ip') || 'local';
+  const forwarded = process.env.TRUSTED_PROXY === '1' ? request.headers.get('x-forwarded-for')?.split(',')[0]?.trim() : undefined;
+  const raw = forwarded || request.headers.get('x-tp-client-ip') || 'local';
   return sha256(raw).slice(0, 24);
 }
 
@@ -112,21 +115,6 @@ export function assertCsrf(request: Request, csrfToken: string): void {
 export function assertWriteSafety(request: Request, csrfToken: string): void {
   assertSameOrigin(request);
   assertCsrf(request, csrfToken);
-}
-
-/* Small in-process sliding-window limiter. Production should swap this for
- * Redis/Upstash; the interface is a single call so that is a one-file change. */
-const buckets = new Map<string, { hits: number[] }>();
-export function rateLimit(key: string, limit: number, windowMs: number): void {
-  const now = Date.now();
-  const bucket = buckets.get(key) ?? { hits: [] };
-  bucket.hits = bucket.hits.filter((t) => t > now - windowMs);
-  if (bucket.hits.length >= limit) tooMany();
-  bucket.hits.push(now);
-  buckets.set(key, bucket);
-  if (buckets.size > 5000) {
-    for (const [k, v] of buckets) if (v.hits.every((t) => t < now - windowMs)) buckets.delete(k);
-  }
 }
 
 export function parseCookies(request: Request): Record<string, string> {

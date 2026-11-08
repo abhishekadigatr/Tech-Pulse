@@ -18,6 +18,8 @@ export interface Hackathon {
   mode: Mode;
   city: string;
   venue: string;
+  venueName?: string;
+  address?: string;
   lat: number;
   lng: number;
   deadline: number;
@@ -74,6 +76,7 @@ export interface Application {
   hackathon: Hackathon;
   status: ApplicationStatus;
   notes: string;
+  notesFormat?: 'client' | 'legacy' | 'empty' | 'unreadable';
   appliedAt: number;
   updatedAt: number;
 }
@@ -125,6 +128,7 @@ export interface Conversation {
   lastMessageAt: number;
   unread: number;
   online?: number;
+  readBy?: Record<string, number>;
 }
 
 /** The server never sees `plaintext`. This is the only shape it stores. */
@@ -155,6 +159,7 @@ export interface CalendarEvent {
   endsAt: number;
   hackathonId: string | null;
   notes: string;
+  notesFormat?: 'client' | 'legacy' | 'empty' | 'unreadable';
   remindOffsets: number[];
   createdAt: number;
 }
@@ -229,4 +234,5 @@ export interface Paged<T> {
   page: number;
   pageSize: number;
   total: number;
+  nextCursor?: string | null;
 }

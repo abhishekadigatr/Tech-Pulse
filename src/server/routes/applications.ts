@@ -1,4 +1,3 @@
-import { sealForUser } from '../crypto.ts';
 import { get, run } from '../db.ts';
 import { notFound } from '../http.ts';
 import { applicationsFor, createApplication, toApplication, type ApplicationRow } from '../repo.ts';
@@ -32,7 +31,7 @@ export async function handleApplications(ctx: Ctx): Promise<Response | null> {
     const input = await readBody(c, applicationPatchSchema);
     run('UPDATE applications SET status=?, notes=?, updated_at=? WHERE id=?',
       input.status ?? existing.status,
-      input.notes !== undefined ? sealForUser(auth.user.id, input.notes) : existing.notes,
+      input.notes !== undefined ? input.notes : existing.notes,
       Date.now(), params.id);
     return ok({ application: toApplication(get<ApplicationRow>('SELECT * FROM applications WHERE id=?', params.id)!) });
   });

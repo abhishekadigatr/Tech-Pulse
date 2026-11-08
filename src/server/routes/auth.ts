@@ -1,4 +1,3 @@
-import { randomInt } from 'node:crypto';
 import { z } from 'zod';
 import QRCode from 'qrcode';
 import {
@@ -14,6 +13,7 @@ import {
 import { clientIp, conflict, json, notFound, withCookies } from '../http.ts';
 import { enforceApiAccess, limit, ok, publicWrite, readBody, requireAuth, Routes, write, type Ctx } from '../router.ts';
 import { toMe } from '../repo.ts';
+import { consumeEmailCode, issueEmailCode } from '../email-codes.ts';
 import { getHub } from '../ws-hub.ts';
 import {
   confirm2faSchema, disable2faSchema, email, emailCodeSchema, loginSchema, mfaSchema,
@@ -21,9 +21,6 @@ import {
 } from '../schemas.ts';
 
 const dev = (): boolean => process.env.NODE_ENV !== 'production';
-const codeHash = (mail: string, code: string): string => sha256(`verify:${mail}:${code}`);
-const resetKey = (mail: string, code: string): string => sha256(`reset:${mail}:${code}`);
-const sixDigit = (): string => String(randomInt(100_000, 1_000_000));
 const emailOnlySchema = z.object({ email });
 
 let dummyHash: string | null = null;
@@ -60,14 +57,16 @@ export async function handleAuth(ctx: Ctx): Promise<Response | null> {
     if (userByEmail(input.email)) conflict('An account with this email already exists');
     const hash = await hashPassword(input.password);
     const id = uid('usr');
-    const code = sixDigit();
-    run(`INSERT INTO users (id,email,name,password_hash,email_verified,verification_hash,verification_expires,avatar_hue,college,city,skills,bio,created_at)
-         VALUES (?,?,?,?,0,?,?,?,?,?,?,?,?)`,
-      id, input.email, input.name, hash, codeHash(input.email, code), Date.now() + 15 * 60_000,
+    run(`INSERT INTO users (id,email,name,password_hash,email_verified,avatar_hue,college,city,skills,bio,created_at)
+         VALUES (?,?,?,?,0,?,?,?,?,?,?)`,
+      id, input.email, input.name, hash,
       Math.floor(Math.random() * 360), input.college, input.city, JSON.stringify(input.skills), '', Date.now());
     run('INSERT INTO user_settings (user_id) VALUES (?)', id);
     audit(id, 'auth.register', c.request);
-    return json({ ok: true, email: input.email, ...(dev() ? { devCode: code } : {}),
+    let code: string | null;
+    try { code = await issueEmailCode(id, input.email, 'verify'); }
+    catch { return json({ error: 'Account created, but email delivery failed. Use resend verification.', code: 'MAIL_UNAVAILABLE' }, 503); }
+    return json({ ok: true, email: input.email, ...(dev() && code ? { devCode: code } : {}),
       message: dev() ? 'Account created. Use the code below to verify your email.' : 'Check your email for a verification code.' }, 201);
   });
 
@@ -135,8 +134,7 @@ export async function handleAuth(ctx: Ctx): Promise<Response | null> {
     const input = await readBody(c, emailCodeSchema);
     limit(`verify:${clientIp(c.request)}`, 12, 15 * 60_000);
     const user = userByEmail(input.email);
-    if (!user || !user.verification_hash || !user.verification_expires ||
-        user.verification_expires < Date.now() || user.verification_hash !== codeHash(input.email, input.code)) {
+    if (!user || user.email_verified || !consumeEmailCode(user.id, 'verify', input.code)) {
       return json({ error: 'Invalid or expired verification code', code: 'INVALID_CODE' }, 400);
     }
     run('UPDATE users SET email_verified=1, verification_hash=NULL, verification_expires=NULL WHERE id=?', user.id);
@@ -144,23 +142,37 @@ export async function handleAuth(ctx: Ctx): Promise<Response | null> {
     return ok({ ok: true });
   });
 
+  r.post('/auth/resend-verification', async ({ ctx: c }) => {
+    publicWrite(c);
+    const input = await readBody(c, emailOnlySchema);
+    limit(`resend:${clientIp(c.request)}`, 5, 15 * 60_000);
+    const user = userByEmail(input.email);
+    let code: string | null = null;
+    if (user && !user.email_verified) {
+      try { code = await issueEmailCode(user.id, input.email, 'verify'); }
+      catch { console.error('[mail] Verification delivery failed'); }
+    }
+    return ok({ ok: true, ...(dev() && code ? { devCode: code } : {}), message: 'If verification is needed, a code will be sent. Please wait a minute between requests.' });
+  });
+
   r.post('/auth/forgot-password', async ({ ctx: c }) => {
     publicWrite(c);
     const input = await readBody(c, emailOnlySchema);
     limit(`forgot:${clientIp(c.request)}`, 5, 15 * 60_000);
     const user = userByEmail(input.email);
-    const code = sixDigit();
-    if (user) run('UPDATE users SET reset_hash=?, reset_expires=? WHERE id=?', resetKey(input.email, code), Date.now() + 15 * 60_000, user.id);
-    // Same response whether or not the account exists: no user enumeration.
-    return ok({ ok: true, ...(dev() && user ? { devCode: code } : {}), message: 'If that account exists, a reset code has been sent.' });
+    let code: string | null = null;
+    if (user) {
+      try { code = await issueEmailCode(user.id, input.email, 'reset'); }
+      catch { console.error('[mail] Password reset delivery failed'); }
+    }
+    return ok({ ok: true, ...(dev() && code ? { devCode: code } : {}), message: 'If that account exists, a reset code has been sent.' });
   });
 
   r.post('/auth/reset-password', async ({ ctx: c }) => {
     publicWrite(c);
     const input = await readBody(c, resetSchema);
     const user = userByEmail(input.email);
-    if (!user || !user.reset_hash || !user.reset_expires || user.reset_expires < Date.now() ||
-        user.reset_hash !== resetKey(input.email, input.code)) {
+    if (!user || !consumeEmailCode(user.id, 'reset', input.code)) {
       return json({ error: 'Invalid or expired reset code', code: 'INVALID_CODE' }, 400);
     }
     run('UPDATE users SET password_hash=?, reset_hash=NULL, reset_expires=NULL WHERE id=?', await hashPassword(input.password), user.id);

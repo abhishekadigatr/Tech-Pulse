@@ -43,6 +43,11 @@ CREATE TABLE IF NOT EXISTS user_settings (
   show_journey_tips INTEGER NOT NULL DEFAULT 1,
   weekly_digest INTEGER NOT NULL DEFAULT 1
 );
+CREATE TABLE IF NOT EXISTS notes_keys (
+  user_id TEXT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+  salt TEXT NOT NULL, iv TEXT NOT NULL, ciphertext TEXT NOT NULL, version INTEGER NOT NULL,
+  created_at INTEGER NOT NULL
+);
 CREATE TABLE IF NOT EXISTS vaults (
   user_id TEXT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
   salt TEXT NOT NULL,
@@ -286,6 +291,10 @@ export function db(): DatabaseSync {
   connection.exec('PRAGMA foreign_keys = ON;');
   connection.exec('PRAGMA busy_timeout = 5000;');
   connection.exec(SCHEMA);
+  // Additive, idempotent migration for existing installations.
+  const columns = new Set((connection.prepare('PRAGMA table_info(hackathons)').all() as Array<{ name: string }>).map((c) => c.name));
+  if (!columns.has('venue_name')) connection.exec("ALTER TABLE hackathons ADD COLUMN venue_name TEXT NOT NULL DEFAULT ''");
+  if (!columns.has('address')) connection.exec("ALTER TABLE hackathons ADD COLUMN address TEXT NOT NULL DEFAULT ''");
   seedStatic();
   return connection;
 }
